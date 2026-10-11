@@ -22,8 +22,8 @@ RNN 탐지기로 욕설 **위치**를 찾고, RNN 언어 모델로 문맥에 맞
 ## 실행
 
 ```bash
-git clone <이 저장소 주소>
-cd <저장소>/project
+git clone https://github.com/blingblang-garam/korean-profanity-purifier.git
+cd korean-profanity-purifier/project
 python3 -m venv .venv && .venv/bin/pip install numpy matplotlib
 .venv/bin/python train_demo.py      # 예시 데이터로 학습 + E1~E4 비교 (CPU 약 20초)
 .venv/bin/python experiments.py     # E5~E7
