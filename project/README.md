@@ -28,7 +28,7 @@ python3 -m venv .venv && .venv/bin/pip install numpy matplotlib   # E8은 torch 
 .venv/bin/python real_data.py     # 실제 데이터 (약 3분)
 ```
 
-실제 데이터는 `data/`에 각 저장소를 clone (라이선스상 재배포하지 않으므로 `.gitignore` 처리). KOLD는 Git LFS 필요.
+실제 데이터는 `data/`에 각 저장소를 clone (라이선스상 재배포하지 않으므로 `.gitignore` 처리). KOLD는 Git LFS 필요 — git-lfs가 없으면 아래 마지막 두 줄처럼 `kold_v1.json`만 curl로 받으면 됩니다.
 
 ```bash
 mkdir -p data && cd data
@@ -37,6 +37,8 @@ git clone --depth 1 https://github.com/boychaboy/KOLD.git            # brew inst
 git clone --depth 1 https://github.com/smilegate-ai/korean_unsmile_dataset.git
 git clone --depth 1 https://github.com/kocohub/korean-hate-speech.git
 git clone --depth 1 https://github.com/adlnlp/K-MHaS.git
+# git-lfs 없이 KOLD 받기 (위 KOLD clone 대신)
+mkdir -p KOLD/data && curl -L -o KOLD/data/kold_v1.json https://media.githubusercontent.com/media/boychaboy/KOLD/main/data/kold_v1.json
 ```
 
 ## 결과 1 — 예시 문장 (동작 확인용)
@@ -87,13 +89,15 @@ LM 퍼플렉서티(처음 보는 깨끗한 댓글 500개 중앙값) 113.17 → 8
 | E3 양방향 + 고정 치환 | 0.435 | 0.821 | 0.743 | 0.250 | 0.525 |
 | E4 양방향 + RNNLM + 재검증 | 0.400 | 0.792 | 0.901 | **0.271** | 0.530 |
 
+> **재실행 시 J 변동 주의:** 위 표는 `saved/real_data_log.txt`의 값입니다. STA를 판정하는 심판 분류기가 실행 환경(NumPy 버전 등)에 따라 다르게 학습되어 J가 크게 흔들립니다. 2026-10-13 macOS·Python 3.14에서 다시 실행했을 때 심판 정확도 0.597, J는 E1 0.143 · E4 0.119였습니다(로그는 0.678, 0.267 · 0.271). 심판에 의존하지 않는 지표는 안정적이었습니다(단방향 명시적 욕설 재현율 0.923, KOLD 구간 안 비율 0.716). 어느 실행에서도 E4가 E1보다 낫지 않았다는 결론은 같습니다.
+
 ### 실제 데이터에서 확인한 것 (정직한 해석)
 
 - **예시 데이터 성능은 실제로 이어지지 않음.** 생성 데이터 J 0.77~0.80 → 실제 0.27
 - 1차 실행에서 양방향 탐지기가 주입 **위치**를 외움(명시적 재현율 0.50) → 주입 위치·형태를 무작위화하자 0.66~0.74. 실행마다 편차가 커서 여러 시드 평균이 필요
 - 실제 데이터에서는 **단방향이 재현율, 양방향이 정밀도**에서 우세 — 예시 데이터와 다른 결과
 - 순화 단계 약점: 문장 평균 퍼플렉서티는 후보 간 차이가 작아 문맥에 안 맞는 후보("사람들아")가 뽑힘, 구간이 어절 일부만 잡히면 조각 출력("노가다사람들아")
-- 심판 분류기 정확도 0.68이라 STA는 참고값. 비속어 패턴 잔존율을 함께 볼 것
+- 심판 분류기 정확도가 0.60~0.68로 약해 STA와 J는 참고값이며 실행마다 0.12~0.27 범위로 흔들림. 비속어 패턴 잔존율과 탐지 재현율을 함께 볼 것
 
 ## 다음 과제
 
