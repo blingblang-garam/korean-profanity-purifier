@@ -8,7 +8,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import numpy as np
-from common.time_layers import TimeRNN
+from common.time_layers import TimeRNN, TimeLSTM
 from common.functions import sigmoid
 
 
@@ -51,6 +51,18 @@ class TimeBiRNN:
         dx1 = self.forward_rnn.backward(dhs[:, :, :H])
         dx2 = self._flip(self.backward_rnn.backward(self._flip(dhs[:, :, H:])))
         return dx1 + dx2
+
+
+class TimeBiLSTMMasked(TimeBiRNN):
+    """ch06 TimeLSTM 두 개로 만든 양방향 LSTM. 마스크(길이 안에서만 역순) 처리는 TimeBiRNN과 같다.
+    교재 common.TimeBiLSTM은 패딩을 고려하지 않고 통째로 뒤집어서, 길이가 다른 문장을 묶으면 역방향이 패딩부터 읽는다."""
+
+    def __init__(self, Wx1, Wh1, b1, Wx2, Wh2, b2):
+        self.forward_rnn = TimeLSTM(Wx1, Wh1, b1, stateful=False)
+        self.backward_rnn = TimeLSTM(Wx2, Wh2, b2, stateful=False)
+        self.params = self.forward_rnn.params + self.backward_rnn.params
+        self.grads = self.forward_rnn.grads + self.backward_rnn.grads
+        self.ridx = None
 
 
 class MaskedTimeSigmoidWithLoss:

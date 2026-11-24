@@ -13,14 +13,17 @@ import pickle
 import numpy as np
 from common.time_layers import TimeEmbedding, TimeRNN, TimeAffine
 from common.functions import sigmoid, softmax
+from common.time_layers import TimeLSTM
 from ch05.simple_rnnlm import SimpleRnnlm
-from layers_ext import TimeBiRNN, MaskedTimeSigmoidWithLoss
+from ch06.rnnlm import Rnnlm
+from layers_ext import TimeBiRNN, TimeBiLSTMMasked, MaskedTimeSigmoidWithLoss
 from loader import pad_batch
 
 
 class RnnDetector:
     def __init__(self, vocab_size, wordvec_size=32, hidden_size=64, bidirectional=True,
-                 embed_W=None, pos_weight=2.0, seed=0):
+                 embed_W=None, pos_weight=2.0, seed=0, cell='rnn'):
+        """cell='rnn' → ch05 TimeRNN, cell='lstm' → ch06 TimeLSTM (게이트 4개라 가중치가 4H 폭)"""
         V, D, H = vocab_size, wordvec_size, hidden_size
         rs = np.random.RandomState(seed)
         rn = rs.randn
@@ -29,14 +32,16 @@ class RnnDetector:
         embed_W = (rn(V, D) / 100).astype('f') if embed_W is None else embed_W.astype('f')
         D = embed_W.shape[1]
 
+        G = 4 * H if cell == 'lstm' else H
+
         def rnn_params():
-            return [(rn(D, H) / np.sqrt(D)).astype('f'), (rn(H, H) / np.sqrt(H)).astype('f'), np.zeros(H, 'f')]
+            return [(rn(D, G) / np.sqrt(D)).astype('f'), (rn(H, G) / np.sqrt(H)).astype('f'), np.zeros(G, 'f')]
 
         if bidirectional:
-            self.rnn = TimeBiRNN(*rnn_params(), *rnn_params())
+            self.rnn = (TimeBiLSTMMasked if cell == 'lstm' else TimeBiRNN)(*rnn_params(), *rnn_params())
             out_dim = 2 * H
         else:
-            self.rnn = TimeRNN(*rnn_params(), stateful=False)
+            self.rnn = (TimeLSTM if cell == 'lstm' else TimeRNN)(*rnn_params(), stateful=False)
             out_dim = H
         affine_W = (rn(out_dim, 1) / np.sqrt(out_dim)).astype('f')
         affine_b = np.zeros(1, 'f')
@@ -132,15 +137,11 @@ class SentenceClassifier:
         return sigmoid(self._score(xs, mask))
 
 
-class SentenceLM(SimpleRnnlm):
-    """ch05 SimpleRnnlm 그대로 + 문장 단위 퍼플렉서티 채점 메서드만 추가"""
+class SentenceScorer:
+    """언어 모델에 붙이는 문장 채점 메서드 (ch05 SimpleRnnlm · ch06 Rnnlm 공통)"""
 
-    def __init__(self, vocab_size, wordvec_size=32, hidden_size=96, bos_id=2):
-        super().__init__(vocab_size, wordvec_size, hidden_size)
-        self.bos_id = bos_id
-
-    def sentence_perplexity(self, id_seqs):
-        """<s> 문장 <s> 에서 각 자모(+문장 끝)를 맞히는 평균 교차 엔트로피의 exp. 낮을수록 자연스럽다."""
+    def token_ce(self, id_seqs):
+        """<s> 문장 <s> 에서 각 자모(+문장 끝)의 교차 엔트로피 -log p(자모 | 앞 문맥). 문장마다 길이 len+1 배열."""
         ins = [np.concatenate(([self.bos_id], s)).astype('i') for s in id_seqs]
         outs = [np.concatenate((s, [self.bos_id])).astype('i') for s in id_seqs]
         xs, mask = pad_batch(ins)
@@ -153,7 +154,11 @@ class SentenceLM(SimpleRnnlm):
         N, T, V = h.shape
         p = softmax(h.reshape(N * T, V)).reshape(N, T, V)
         ce = -np.log(np.take_along_axis(p, ts[:, :, None], axis=2)[:, :, 0] + 1e-7)
-        return np.exp((ce * mask).sum(axis=1) / mask.sum(axis=1))
+        return [ce[i, :len(s) + 1] for i, s in enumerate(id_seqs)]
+
+    def sentence_perplexity(self, id_seqs):
+        """문장 전체 평균 교차 엔트로피의 exp. 낮을수록 자연스럽다."""
+        return np.array([np.exp(c.mean()) for c in self.token_ce(id_seqs)])
 
     def save(self, path):
         with open(path, 'wb') as f:
@@ -163,3 +168,19 @@ class SentenceLM(SimpleRnnlm):
         with open(path, 'rb') as f:
             for p, q in zip(self.params, pickle.load(f)):
                 p[...] = q
+
+
+class SentenceLM(SentenceScorer, SimpleRnnlm):
+    """ch05 SimpleRnnlm 그대로 + 문장 채점 메서드만 추가"""
+
+    def __init__(self, vocab_size, wordvec_size=32, hidden_size=96, bos_id=2):
+        super().__init__(vocab_size, wordvec_size, hidden_size)
+        self.bos_id = bos_id
+
+
+class LstmSentenceLM(SentenceScorer, Rnnlm):
+    """ch06 Rnnlm(LSTM) 그대로 + 문장 채점 메서드만 추가"""
+
+    def __init__(self, vocab_size, wordvec_size=48, hidden_size=128, bos_id=2):
+        super().__init__(vocab_size, wordvec_size, hidden_size)
+        self.bos_id = bos_id
