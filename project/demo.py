@@ -1,7 +1,7 @@
 # coding: utf-8
 """발표 데모: 문장을 넣으면 탐지 확률 → 구간 → 후보별 점수 → 순화 결과를 한 화면에 보여 준다.
 
-실행:  cd project && python demo.py            → 브라우저에서 http://localhost:8000
+실행:  cd project && python demo.py            → 브라우저에서 http://localhost:8765
        python demo.py --cli                   → 터미널에서 한 줄씩 입력
 모델:  final_pipeline.py가 저장한 saved/final/seed0/ (없으면 먼저 final_pipeline.py 실행)
 외부 라이브러리 없이 표준 http.server만 사용 → 발표장 노트북에서 인터넷 없이 동작
@@ -149,7 +149,7 @@ def serve(port, systems, main_key):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--seed', type=int, default=0)
-    ap.add_argument('--port', type=int, default=8000)
+    ap.add_argument('--port', type=int, default=int(os.environ.get('PORT', 8765)))
     ap.add_argument('--cli', action='store_true')
     ap.add_argument('--models', default=FINAL, help='모델 폴더 (기본 saved/final_v3)')
     args = ap.parse_args()
