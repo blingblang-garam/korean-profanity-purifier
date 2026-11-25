@@ -53,6 +53,23 @@ def _edit(a, b):
     return prev[-1]
 
 
+JOSA_PAIRS = {'이': '가', '가': '이', '은': '는', '는': '은', '을': '를', '를': '을', '아': '야', '야': '아',
+              '이랑': '랑', '랑': '이랑', '이나': '나', '나': '이나'}
+
+
+def _josa(word, particle):
+    """순화어 받침에 맞게 조사를 고른다 (지랄이 → 난리가, 븅신아 → 바보야). 받침 있으면 이·은·을·아, 없으면 가·는·를·야."""
+    if particle not in JOSA_PAIRS or not word:
+        return particle
+    code = ord(word[-1]) - 0xAC00
+    has_jong = 0 <= code <= 11171 and code % 28 != 0
+    first = {'이': True, '가': False, '은': True, '는': False, '을': True, '를': False, '아': True, '야': False,
+             '이랑': True, '랑': False, '이나': True, '나': False}
+    if first.get(particle) is None:
+        return particle
+    return particle if first[particle] == has_jong else JOSA_PAIRS[particle]
+
+
 def family_match(word, max_dist=0.34):
     """구간 글자열 → (가장 가까운 비속어 계열의 순화어 목록, 거리). 숫자·기호 삽입(시1발)은 지우고 비교."""
     toks = [t for t in decompose(_NOISE.sub('', word))[0] if t != '▁']
@@ -95,7 +112,7 @@ def family_candidates(span, overlap=None):
                         pre = ''
                     pre = pre + ' ' if len(pre) >= 2 else pre
                     best, best_d = cost, d
-                    out = [pre + c + (particle if c in NOUN_CLEANS else '') + post for c in cleans]
+                    out = [pre + c + (_josa(c, particle) if c in NOUN_CLEANS else '') + post for c in cleans]
     return out, best_d
 
 

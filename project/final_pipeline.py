@@ -109,6 +109,32 @@ def train_judge_v2(test200):
     return judge, acc
 
 
+def train_detector_es(det, X, Y, epochs, seed, vocab, dev):
+    """[v3] 조기 종료: 매 에포크 실제 dev(Curse-detection 절반)의 문장 F1을 재고, 가장 좋았던 에포크의 가중치로 되돌린다.
+    학습 곡선(learning_curve.py)에서 합성 데이터 성능은 계속 오르는데 실제 성능은 일찍 멈추거나 떨어지는 것을 확인했다."""
+    from learning_curve import sentence_scores, pr_at
+    from common.util import clip_grads
+    from loader import batches
+    opt, rng = SGD(1.0), np.random.RandomState(seed)
+    texts, gold = dev
+    best, best_ep, best_params = -1.0, 0, None
+    for ep in range(1, epochs + 1):
+        for xs, ts, mask in batches(X, Y, 32, rng):
+            det.forward(xs, ts, mask)
+            det.backward()
+            clip_grads(det.grads, 5.0)
+            opt.update(det.params, det.grads)
+        p, r = pr_at(sentence_scores(det, vocab, texts), gold, 0.5)
+        f1 = 2 * p * r / (p + r + 1e-9)
+        print(f'  에폭 {ep:2d} | dev 정밀도 {p:.3f} 재현율 {r:.3f} F1 {f1:.3f}', flush=True)
+        if f1 > best:
+            best, best_ep, best_params = f1, ep, [q.copy() for q in det.params]
+    for q, b in zip(det.params, best_params):
+        q[...] = b
+    print(f'  → {best_ep}에폭 가중치 사용 (dev F1 {best:.3f})')
+    return best_ep
+
+
 def train_lm(cls, sents, vocab, epochs, seed):
     np.random.seed(seed)                 # 교재 모델은 전역 np.random으로 초기화
     lm = cls(len(vocab), 48, 128, bos_id=vocab.tok_to_id['<s>'])
@@ -137,9 +163,16 @@ def run_seed(seed, data, vocab, judge, ref, args, t0):
     pool = [s for s in order if s not in data['held_set']]
     n_inj, n_neg, n_lm = (6000, 2000, 8000) if args.quick else (24000, 6000, 30000)
     lm_sents = pool[:n_lm]
-    real_pairs = [p for p in (inject_real(s, rng) for s in pool[:n_inj]) if p]
+    if args.data == 'v3':
+        from data_v3 import inject_v3, trap_negative
+        real_pairs = [p for p in (inject_v3(s, rng) for s in pool[:n_inj]) if p]
+        traps = [trap_negative(s, rng) for s in pool[30000:32000]]
+        lm_sents = lm_sents + data['extra_lm']
+    else:
+        real_pairs = [p for p in (inject_real(s, rng) for s in pool[:n_inj]) if p]
+        traps = []
     tpl_pairs = make_pairs(4000, seed=seed + 1)
-    neg = [(s, s, [0] * len(s)) for s in pool[n_inj:n_inj + n_neg]]
+    neg = [(s, s, [0] * len(s)) for s in pool[n_inj:n_inj + n_neg]] + traps
     train_pairs = real_pairs + tpl_pairs + neg
     print(f'\n========== 시드 {seed} ==========')
     print(f'[학습 쌍] 실제 댓글 주입 {len(real_pairs)} + 템플릿 {len(tpl_pairs)} + 깨끗한 댓글 {len(neg)} | LM 말뭉치 {len(lm_sents)}문장')
@@ -162,7 +195,10 @@ def run_seed(seed, data, vocab, judge, ref, args, t0):
         else:
             ts = time.time()
             print(f'[탐지기 {name}] 학습 {ep}에폭 ({ts - t0:.0f}s)')
-            train_detector(det, X, Y, epochs=ep, lr=1.0, seed=seed)
+            if args.data == 'v3':
+                times[f'선택 에포크/{name}'] = train_detector_es(det, X, Y, 12, seed, vocab, data['dev'])
+            else:
+                train_detector(det, X, Y, epochs=ep, lr=1.0, seed=seed)
             det.save(fname('det', name))
             times[f'학습시간/{name}'] = time.time() - ts
         dets[name] = det
@@ -188,7 +224,7 @@ def run_seed(seed, data, vocab, judge, ref, args, t0):
     m.update(times)
 
     # ── ① Curse-detection 문장 단위 탐지 ──
-    cur = data['curse80']
+    cur = data['curse_test']                 # dev 절반은 에포크 고르기(v3)에 쓰므로 탐지 평가는 test 절반으로만
     gold = np.array([l for _, l in cur])
     explicit = np.array([bool(PROFANE_RE.search(t)) for t, _ in cur])
     systems = {'E1 금칙어 사전': lambda t: dictionary_baseline(t) != t}
@@ -275,7 +311,10 @@ def run_seed(seed, data, vocab, judge, ref, args, t0):
             det_s.load(fname('det', '음절 양방향 RNN'))
         else:
             print(f'[E5 음절 탐지기] 학습 (어휘 {len(sv)}) ({time.time() - t0:.0f}s)')
-            train_detector(det_s, Xs, Ys, epochs=12, lr=1.0, seed=seed)
+            if args.data == 'v3':
+                m['선택 에포크/음절'] = train_detector_es(det_s, Xs, Ys, 12, seed, sv, data['dev'])
+            else:
+                train_detector(det_s, Xs, Ys, epochs=12, lr=1.0, seed=seed)
             det_s.save(fname('det', '음절 양방향 RNN'))
         seen = set(''.join(p[0] for p in train_pairs))
         for name, det, voc in [('음절', det_s, sv), ('자모', bi, vocab)]:
@@ -343,8 +382,13 @@ def main():
     ap.add_argument('--lstm-epochs', type=int, default=8)
     ap.add_argument('--lm-epochs', type=int, default=4)
     ap.add_argument('--skip-e5', action='store_true')
+    ap.add_argument('--data', choices=['v2', 'v3'], default='v2', help='v3 = data_v3.py 학습 데이터 + 조기 종료 + LM 말뭉치 확대')
     ap.add_argument('--eval-only', action='store_true', help='저장된 시드별 모델로 평가만 다시')
     args = ap.parse_args()
+    global OUT
+    if args.data == 'v3':
+        OUT = os.path.join(HERE, 'saved', 'final_v3')
+        os.makedirs(OUT, exist_ok=True)
     tag = 's' + '_'.join(map(str, args.seeds))           # 시드를 나눠 병렬 실행해도 로그·결과가 안 겹치게
     prefix = ('quick_' if args.quick else 'final_') + ('eval_' if args.eval_only else '')
     sys.stdout = Tee(os.path.join(OUT, f'{prefix}log_{tag}.txt'))
@@ -364,6 +408,12 @@ def main():
                 curse80=[(t, l) for t, l in curse if len(t) <= 80],
                 kold_off=[(t, l) for t, l in kold if any(l) and len(t) <= 80][:1000],
                 kold_non=[(t, l) for t, l in kold if not any(l) and len(t) <= 80][:1000])
+    # Curse-detection(평가 200문장 제외, 80자 이하)을 learning_curve.py와 같은 방식으로 dev / test 절반으로 나눈다
+    cur = [(t, l) for t, l in curse if len(t) <= 80 and t not in set(test200)]
+    random.Random(7).shuffle(cur)
+    dev = cur[:len(cur) // 2]
+    data['dev'] = ([t for t, _ in dev], np.array([l for _, l in dev]))
+    data['curse_test'] = cur[len(cur) // 2:]
     print(f'[데이터] 깨끗한 댓글 {len(clean)}개 | Curse-detection {len(curse)}문장 | KOLD {len(kold)}문장 | 평가 200문장')
 
     vocab = JamoVocab(clean + [p[0] for p in make_pairs(4000, seed=1)])
@@ -385,6 +435,11 @@ def main():
     ref_ppl = float(np.median(ref_lm.sentence_perplexity([vocab.encode(s)[0] for s in held])))
     print(f'  유창성(FL) 기준 LM: 처음 보는 깨끗한 댓글 퍼플렉서티 중앙값 {ref_ppl:.2f} (시스템 안의 LM과 별도 시드)')
     ref = {'lm': ref_lm, 'ppl': ref_ppl}
+    data['extra_lm'] = []
+    if args.data == 'v3':
+        from data_v3 import load_unlabeled_clean
+        data['extra_lm'], n_all = load_unlabeled_clean(judge, 60000, exclude=held)
+        print(f'[v3 LM 말뭉치] HateSpeech 비라벨 댓글 문장 {n_all}개 중 정규식·심판 통과 {len(data["extra_lm"])}개 추가')
 
     results, outs_by_seed = [], {}
     for seed in args.seeds:

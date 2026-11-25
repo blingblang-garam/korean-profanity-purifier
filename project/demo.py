@@ -21,7 +21,7 @@ from models import RnnDetector, SentenceLM, LstmSentenceLM
 from purifier import Purifier, dictionary_baseline, family_candidates
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FINAL = os.path.join(HERE, 'saved', 'final')
+FINAL = os.path.join(HERE, 'saved', 'final_v3')       # v3 모델 (없으면 --models saved/final 로 v2)
 
 EXAMPLES = ['시1발 오늘 존나 덥네', '그만 부들거려 노가다새끼들아', '실업급여 허위로 타먹은적 있는 새끼들은 돌 던질 자격없음',
             '꼴리지는 않고 그냥 존나 귀엽다', 'ㅅㅂ 과제 ㅈㄴ 많아', '새끼 고양이가 너무 귀엽다', '시발역에서 내렸다',
@@ -29,7 +29,7 @@ EXAMPLES = ['시1발 오늘 존나 덥네', '그만 부들거려 노가다새끼
 
 
 def load_models(seed_dir):
-    with open(os.path.join(FINAL, 'vocab.pkl'), 'rb') as f:
+    with open(os.path.join(os.path.dirname(seed_dir), 'vocab.pkl'), 'rb') as f:
         id_to_tok = pickle.load(f)
     vocab = JamoVocab()
     vocab.id_to_tok = list(id_to_tok)
@@ -45,9 +45,9 @@ def load_models(seed_dir):
     lstm_lm = LstmSentenceLM(V, 48, 128, bos_id=bos)
     lstm_lm.load(os.path.join(seed_dir, 'lm_LSTM_LM.pkl'))
     systems = {
-        'v1 (양방향 RNN + RNN LM, 문장 채점)': Purifier(m['양방향_RNN'], rnn_lm, vocab),
-        'v2 (양방향 RNN + RNN LM, 국소+계열)': Purifier(m['양방향_RNN'], rnn_lm, vocab, score='local', family=True),
-        'v2 LSTM (양방향 LSTM + LSTM LM, 국소+계열)': Purifier(m['양방향_LSTM'], lstm_lm, vocab, score='local', family=True),
+        '1차 방식 (문장 퍼플렉서티)': Purifier(m['양방향_RNN'], rnn_lm, vocab),
+        '양방향 RNN + RNN LM (국소+계열)': Purifier(m['양방향_RNN'], rnn_lm, vocab, score='local', family=True),
+        '최종: 양방향 LSTM + LSTM LM (국소+계열)': Purifier(m['양방향_LSTM'], lstm_lm, vocab, score='local', family=True),
     }
     return vocab, systems
 
@@ -98,7 +98,7 @@ table{border-collapse:collapse;width:100%;font-size:16px}td,th{border-bottom:1px
 th{color:var(--sub);font-weight:600;font-size:13px}tr.best td{font-weight:700;color:var(--acc)}.jamo{font-family:ui-monospace,monospace;font-size:13px;color:var(--sub);word-break:break-all}
 @media (max-width:640px){.sys{grid-template-columns:1fr}}
 </style></head><body><main>
-<h1>문맥 보존형 비속어 순화기</h1><p class="lead">탐지(양방향 RNN/LSTM) → 어절 단위 구간 → 같은 계열 순화어 후보 → 언어 모델 국소 퍼플렉서티로 선택 → 재검증</p>
+<h1>문맥 보존형 비속어 순화기</h1><p class="lead">탐지(양방향 LSTM) → 어절 단위 구간 → 같은 계열 순화어 후보 → 언어 모델 국소 퍼플렉서티로 선택 → 재검증</p>
 <div class="row"><input id="q" placeholder="문장을 입력하세요" autofocus><button onclick="go()">순화</button></div>
 <div class="ex" id="ex"></div><div id="res"></div></main>
 <script>
@@ -107,7 +107,7 @@ EX.forEach(t=>{const s=document.createElement('span');s.textContent=t;s.onclick=
 const q=document.getElementById('q');q.addEventListener('keydown',e=>{if(e.key==='Enter')go()});
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 async function go(){if(!q.value.trim())return;const r=await fetch('/api?q='+encodeURIComponent(q.value));const d=await r.json();
-const main=d.systems[d.systems.length-2];let h='';
+const main=d.systems[d.systems.length-1];let h='';
 h+='<div class="card"><h2>① 탐지 확률 (글자별, 진할수록 비속어) — '+esc(main.name)+'</h2><div class="heat">';
 [...d.input].forEach((ch,i)=>{const p=main.probs[i]||0;h+='<span style="background:rgba(192,57,43,'+p.toFixed(2)+');color:'+(p>.55?'#fff':'inherit')+'" title="'+p+'">'+(ch===' '?'&nbsp;':esc(ch))+'</span>'});
 h+='</div><p class="jamo">자모 입력: '+esc(d.jamo)+'</p></div>';
@@ -151,9 +151,10 @@ def main():
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--port', type=int, default=8000)
     ap.add_argument('--cli', action='store_true')
+    ap.add_argument('--models', default=FINAL, help='모델 폴더 (기본 saved/final_v3)')
     args = ap.parse_args()
-    vocab, systems = load_models(os.path.join(FINAL, f'seed{args.seed}'))
-    main_key = list(systems)[1]
+    vocab, systems = load_models(os.path.join(args.models, f'seed{args.seed}'))
+    main_key = list(systems)[2]                     # v3에서는 LSTM 버전이 가장 좋다 (평가_분석_요약.md)
     if args.cli:
         print('문장을 입력하세요 (빈 줄이면 종료)')
         for line in sys.stdin:
