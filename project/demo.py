@@ -137,7 +137,7 @@ th{color:var(--sub);font-weight:600;font-size:13px}tr.best td{font-weight:700;co
 .jamo{font-family:ui-monospace,monospace;font-size:13px;color:var(--sub);word-break:break-all}
 @media (max-width:640px){.sys{grid-template-columns:1fr}}
 </style></head><body><main>
-<h1>문맥 보존형 비속어 순화기</h1><p class="lead">탐지(양방향 LSTM + 밈·비속어 사전 검색) → 어절 단위 구간 → 용법·강도 분류 → 같은 계열 순화어 후보 → 언어 모델 국소 퍼플렉서티로 선택 → 재검증</p>
+<h1>문맥 보존형 비속어 순화기 <a href="/arch" style="font-size:15px;color:var(--acc);margin-left:10px">구동 파이프라인 보기 →</a></h1><p class="lead">탐지(양방향 LSTM + 밈·비속어 사전 검색) → 어절 단위 구간 → 용법·강도 분류 → 같은 계열 순화어 후보 → 언어 모델 국소 퍼플렉서티로 선택 → 재검증</p>
 <div class="row"><input id="q" placeholder="문장을 입력하세요" autofocus><button onclick="go()">순화</button></div>
 <div class="ex" id="ex"></div><div id="res"></div></main>
 <script>
@@ -163,6 +163,14 @@ document.getElementById('res').innerHTML=h}
 </script></body></html>'''
 
 
+def arch_page():
+    with open(os.path.join(HERE, 'architecture.html'), encoding='utf-8') as f:
+        page = f.read()
+    ex = os.path.join(HERE, 'architecture_examples.json')
+    data = open(ex, encoding='utf-8').read() if os.path.exists(ex) else '[]'
+    return page.replace('__EXAMPLES_JSON__', data.replace('</', '<\\/'))
+
+
 def serve(port, systems, main_key):
     page = PAGE.replace('__EXAMPLES__', json.dumps(EXAMPLES, ensure_ascii=False)).encode('utf-8')
 
@@ -170,7 +178,15 @@ def serve(port, systems, main_key):
         def do_GET(self):
             from urllib.parse import urlparse, parse_qs
             u = urlparse(self.path)
-            if u.path == '/api':
+            if u.path == '/arch':                       # 구동 파이프라인 아키텍처 (trace_pipeline.py)
+                body = arch_page().encode('utf-8')
+                ctype = 'text/html; charset=utf-8'
+            elif u.path == '/api/trace':
+                from trace_pipeline import trace
+                q = parse_qs(u.query).get('q', [''])[0]
+                body = json.dumps(trace(systems[main_key], q), ensure_ascii=False).encode('utf-8')
+                ctype = 'application/json; charset=utf-8'
+            elif u.path == '/api':
                 q = parse_qs(u.query).get('q', [''])[0]
                 body = json.dumps(analyze(q, systems, main_key), ensure_ascii=False).encode('utf-8')
                 ctype = 'application/json; charset=utf-8'
@@ -185,7 +201,7 @@ def serve(port, systems, main_key):
         def log_message(self, *a):
             pass
 
-    print(f'데모: http://localhost:{port}  (Ctrl+C로 종료)')
+    print(f'데모: http://localhost:{port}   ·   구동 파이프라인: http://localhost:{port}/arch  (Ctrl+C로 종료)')
     ThreadingHTTPServer(('127.0.0.1', port), H).serve_forever()
 
 

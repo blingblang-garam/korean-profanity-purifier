@@ -240,13 +240,17 @@ class Purifier:
         probs = self.char_probs(text)
         return text, find_spans(probs, text, self.thr), probs
 
-    def purify(self, text, verbose=False):
+    def purify(self, text, verbose=False, trace=None):
+        """trace에 dict를 넘기면 단계별 중간값을 기록한다 (아키텍처 시각화용, trace_pipeline.py)"""
         text, spans, probs = self.detect(text)
         log = []
+        T = trace if trace is not None else {}
+        T.update({'det_spans': list(spans), 'lex_spans': [], 'units': []})
         if self.lexicon is not None:                     # 탐지기 ∪ 사전 검색
             extra = [sp for sp in self.lexicon.find_spans(text)
                      if not any(sp[0] < e and s < sp[1] for s, e in spans)]
             if extra:
+                T['lex_spans'] = list(extra)
                 for s, e in extra:
                     probs[s:e] = [1.0] * (e - s)
                 spans = sorted(spans + extra)
@@ -263,6 +267,8 @@ class Purifier:
         for s, e, ds, de in reversed(units):
             span = out[s:e]
             left, right = out[:s], out[e:]
+            U = {'word': span, 'start': s, 'end': e, 'detected': text[ds:de]}
+            T['units'].insert(0, U)
             if self.mode == 'fixed':
                 out = _join(left, INVERSE.get(span, '**'), right)
                 continue
@@ -274,16 +280,19 @@ class Purifier:
                     hit = self.lexicon.protect(span, nxt)
                     if hit:
                         log.append(f'{span!r} 유지 (사전: {hit["kind"]} {hit["head"]!r})')
+                        U.update(protected={'kind': hit['kind'], 'head': hit['head'], 'meaning': hit['meaning']})
                         continue
                 fam, d = family_candidates(span, (ds - s, de - s), self.fam, self.nouns)
+                U.update(family=list(fam), family_dist=round(float(d), 3))
                 if fam:
                     # 사전의 비하 표현(짱깨, 틀딱)은 지우지 않고 중립 표현으로 바꾼다 (지우면 누구 얘기인지 사라짐)
                     slur = self.lexicon is not None and any(
                         f in span for e in self.lexicon.entries if e['kind'] == '비하' for f in e['forms'] if len(f) >= 2)
                     cands = fam if slur and all(fam) else fam + ['']
                     if self.usage is not None and not slur:
-                        lab, _ = self.usage.predict(text, ds, de)
+                        lab, up = self.usage.predict(text, ds, de)
                         lvl = intensity(text, span, len(units))
+                        U.update(usage=lab, usage_probs=[round(float(x), 3) for x in up], intensity=lvl)
                         cands = self._usage_cands(lab, lvl, fam) + ['']
                         log.append(f'{span!r} 용법 {lab} · 강도 {lvl}')
                         prev = left.split()[-1] if left.split() else ''
@@ -303,6 +312,7 @@ class Purifier:
             sents = [_join(left, c, right) for c in cands]
             ppl = self._scores(sents, cands)
             order = sorted(range(len(cands)), key=lambda k: ppl[k])
+            U.update(cands=[{'cand': cands[k], 'sent': sents[k], 'score': round(float(ppl[k]), 2)} for k in order], recheck=[])
             chosen = order[0]
             for k in order:
                 c = cands[k]
@@ -311,11 +321,13 @@ class Purifier:
                     break
                 cs = len(left)                                  # 바꿔 넣은 구간만 재검증
                 p = self.char_probs(sents[k])[cs:cs + len(c)]
+                U['recheck'].append({'cand': c, 'max_p': round(float(max(p)), 3), 'pass': bool(max(p) < self.thr)})
                 if max(p) < self.thr:
                     chosen = k
                     break
                 log.append(f'재검증 탈락: {c!r} (p={max(p):.2f})')
             log.append(f'{span!r} → {cands[chosen]!r}  (ppl {ppl[chosen]:.2f}, 1순위 {cands[order[0]]!r} {ppl[order[0]]:.2f})')
+            U['chosen'] = cands[chosen]
             out = sents[chosen]
         if verbose:
             print('\n'.join(log))
