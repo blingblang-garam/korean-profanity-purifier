@@ -33,6 +33,7 @@ from make_pairs import make_pairs
 from loader import JamoVocab, SyllableVocab, detector_dataset, lm_corpus, load_curse_detection, load_kold
 from models import RnnDetector, SentenceLM, LstmSentenceLM
 from purifier import Purifier, dictionary_baseline
+from lexicon import Lexicon
 from evaluate import char_bleu, span_prf, evaluate, HANDWRITTEN
 from train_demo import train_detector
 from real_data import load_clean_comments, inject_real, PROFANE_RE, DATA, MAX_LEN
@@ -272,32 +273,35 @@ def run_seed(seed, data, vocab, judge, ref, args, t0):
         'E4b +계열 후보': Purifier(bi, rnn_lm, vocab, family=True).purify,
         'E4c +국소+계열': Purifier(bi, rnn_lm, vocab, score='local', family=True).purify,
         'E9 LSTM탐지+LSTM LM(국소+계열)': Purifier(bl, lstm_lm, vocab, score='local', family=True).purify,
+        'E10 E9+밈·비속어 사전 검색': Purifier(bl, lstm_lm, vocab, score='local', family=True, lexicon=Lexicon()).purify,
     }
     jp = judge.prob
-    m['순화/입력 심판 욕설 판정률'] = float(np.mean(jp(test200) >= 0.5))
     outs_all = {}
-    for name, fn in pur.items():
+    # 순화: 개발 중에 출력을 보며 고친 200문장 / 순화B: test 절반에서 새로 뽑아 개발 중 한 번도 안 본 200문장
+    for P, texts in [('순화', test200), ('순화B', data['test200b'])]:
+      m[f'{P}/입력 심판 욕설 판정률'] = float(np.mean(jp(texts) >= 0.5))
+      for name, fn in pur.items():
         ts = time.time()
-        outs = [fn(t) if name.startswith('E1') else fn(t)['output'] for t in test200]
-        sec = (time.time() - ts) / len(test200)
+        outs = [fn(t) if name.startswith('E1 ') else fn(t)['output'] for t in texts]
+        sec = (time.time() - ts) / len(texts)
         tox = jp(outs)
         sta = (tox < 0.5).astype(float)
-        sim = np.array([char_bleu(o, s) for o, s in zip(outs, test200)])
+        sim = np.array([char_bleu(o, s) for o, s in zip(outs, texts)])
         ppl = ref['lm'].sentence_perplexity([vocab.encode(o)[0] if o else np.array([2], 'i') for o in outs])
         fl = np.minimum(1.0, ref['ppl'] / ppl)
         j = sta * sim * fl
-        m[f'순화/{name}/STA'], m[f'순화/{name}/SIM'], m[f'순화/{name}/FL'] = sta.mean(), sim.mean(), fl.mean()
-        m[f'순화/{name}/J'] = j.mean()
+        m[f'{P}/{name}/STA'], m[f'{P}/{name}/SIM'], m[f'{P}/{name}/FL'] = sta.mean(), sim.mean(), fl.mean()
+        m[f'{P}/{name}/J'] = j.mean()
         lex_ok = np.array([0.0 if PROFANE_RE.search(o) else 1.0 for o in outs])
-        m[f'순화/{name}/J_lex'] = float((lex_ok * sim * fl).mean())   # 심판 대신 비속어 패턴 잔존으로 STA를 본 J
-        m[f'순화/{name}/패턴 잔존'] = float(np.mean([bool(PROFANE_RE.search(o)) for o in outs]))
-        m[f'순화/{name}/변경 없음'] = float(np.mean([o == normalize(s) for o, s in zip(outs, test200)]))
-        m[f'순화/{name}/ms'] = sec * 1000
-        outs_all[name] = outs
+        m[f'{P}/{name}/J_lex'] = float((lex_ok * sim * fl).mean())   # 심판 대신 비속어 패턴 잔존으로 STA를 본 J
+        m[f'{P}/{name}/패턴 잔존'] = float(np.mean([bool(PROFANE_RE.search(o)) for o in outs]))
+        m[f'{P}/{name}/변경 없음'] = float(np.mean([o == normalize(s) for o, s in zip(outs, texts)]))
+        m[f'{P}/{name}/ms'] = sec * 1000
+        outs_all[name if P == '순화' else name + ' [B]'] = outs
 
     # ── ④ 손으로 쓴 25문장 (정답 순화문 있음, 과교정 확인용: 개나리·새끼 고양이·시발역 등 함정 5문장) ──
     for name, fn in pur.items():
-        f = fn if name.startswith('E1') else (lambda t, fn=fn: fn(t)['output'])
+        f = fn if name.startswith('E1 ') else (lambda t, fn=fn: fn(t)['output'])
         r = evaluate(f, HANDWRITTEN, lm=ref['lm'], vocab=vocab)
         for k in ('STA', 'SIM', 'FL', 'J', 'EM', '과교정'):
             m[f'손글씨/{name}/{k}'] = r[k]
@@ -359,12 +363,17 @@ def print_summary(s, seeds):
     for name in ['RNN LM', 'LSTM LM']:
         print(f'  {name:8} {row(f"LM 퍼플렉서티/{name}", "{:.2f}")}   {row(f"학습시간/{name}", "{:.0f}")}s')
     print('\n[순화] 실제 욕설 200문장')
-    names = sorted({k.split('/')[1] for k in s if k.startswith('순화/') and k.count('/') == 2}, key=lambda x: (x[:2], x))
+    names = sorted({k.split('/')[1] for k in s if k.startswith('순화/') and k.count('/') == 2}, key=lambda x: (int(re.match(r'E(\d+)', x).group(1)), x))
     print(f'  (입력 200문장 심판 욕설 판정률 {row("순화/입력 심판 욕설 판정률")})')
     for name in names:
         print(f'  {name:30} STA {row(f"순화/{name}/STA")}  SIM {row(f"순화/{name}/SIM")}  FL {row(f"순화/{name}/FL")}  '
               f'J {row(f"순화/{name}/J")}  J_lex {row(f"순화/{name}/J_lex")}  잔존 {row(f"순화/{name}/패턴 잔존")}  '
               f'변경없음 {row(f"순화/{name}/변경 없음")}  {s[f"순화/{name}/ms"][0]:.1f}ms')
+    print(f'\n[순화B] 개발 중 한 번도 안 본 실제 욕설 200문장 (test 절반에서 추출) — 입력 심판 욕설 판정률 {row("순화B/입력 심판 욕설 판정률")}')
+    for name in names:
+        print(f'  {name:30} STA {row(f"순화B/{name}/STA")}  SIM {row(f"순화B/{name}/SIM")}  FL {row(f"순화B/{name}/FL")}  '
+              f'J {row(f"순화B/{name}/J")}  J_lex {row(f"순화B/{name}/J_lex")}  잔존 {row(f"순화B/{name}/패턴 잔존")}  '
+              f'변경없음 {row(f"순화B/{name}/변경 없음")}')
     print('\n[순화] 손으로 쓴 25문장 (정답 있음)')
     for name in names:
         print(f'  {name:30} J {row(f"손글씨/{name}/J")}  정답 일치 {row(f"손글씨/{name}/EM")}  과교정 {row(f"손글씨/{name}/과교정")}')
@@ -414,6 +423,9 @@ def main():
     dev = cur[:len(cur) // 2]
     data['dev'] = ([t for t, _ in dev], np.array([l for _, l in dev]))
     data['curse_test'] = cur[len(cur) // 2:]
+    pool_b = [t for t, l in data['curse_test'] if l == 1 and PROFANE_RE.search(t) and 8 <= len(t) <= MAX_LEN]
+    data['test200b'] = random.Random(43).sample(pool_b, min(200, len(pool_b)))
+    print(f'[평가 B] test 절반의 명시적 욕설 문장 {len(pool_b)}개 중 {len(data["test200b"])}개')
     print(f'[데이터] 깨끗한 댓글 {len(clean)}개 | Curse-detection {len(curse)}문장 | KOLD {len(kold)}문장 | 평가 200문장')
 
     vocab = JamoVocab(clean + [p[0] for p in make_pairs(4000, seed=1)])
@@ -421,7 +433,7 @@ def main():
 
     # ── 심판 + 유창성 기준 LM: 한 번만 학습해 모든 시드·시스템에 공통으로 사용 ──
     print(f'\n[심판] 학습 ({time.time() - t0:.0f}s)')
-    judge, judge_acc = train_judge_v2(test200)
+    judge, judge_acc = train_judge_v2(test200 + data['test200b'])
     ref_dir = os.path.join(OUT, 'quick' if args.quick else '')
     os.makedirs(ref_dir, exist_ok=True)
     ref_path = os.path.join(ref_dir, f'ref_lm_{tag}.pkl')
@@ -438,7 +450,9 @@ def main():
     data['extra_lm'] = []
     if args.data == 'v3':
         from data_v3 import load_unlabeled_clean
-        data['extra_lm'], n_all = load_unlabeled_clean(judge, 60000, exclude=held)
+        # LM 말뭉치 거르기는 v3 학습 때와 같은 심판(평가 200문장만 뺀 것)으로 해야 같은 말뭉치·음절 어휘가 나온다
+        judge_lm = judge if 'test200b' not in data else train_judge_v2(test200)[0]
+        data['extra_lm'], n_all = load_unlabeled_clean(judge_lm, 60000, exclude=held)
         print(f'[v3 LM 말뭉치] HateSpeech 비라벨 댓글 문장 {n_all}개 중 정규식·심판 통과 {len(data["extra_lm"])}개 추가')
 
     results, outs_by_seed = [], {}
@@ -450,9 +464,16 @@ def main():
             pickle.dump(vocab.id_to_tok, f)
         with open(os.path.join(OUT, f'outputs_seed{seed}.csv'), 'w', encoding='utf-8-sig', newline='') as f:
             w = csv.writer(f)
-            w.writerow(['원문'] + list(outs.keys()))
+            ka = [k for k in outs if not k.endswith(' [B]')]
+            w.writerow(['원문'] + ka)
             for i, t in enumerate(test200):
-                w.writerow([t] + [outs[k][i] for k in outs])
+                w.writerow([t] + [outs[k][i] for k in ka])
+        with open(os.path.join(OUT, f'outputs_seed{seed}_B.csv'), 'w', encoding='utf-8-sig', newline='') as f:
+            w = csv.writer(f)
+            kb = [k for k in outs if k.endswith(' [B]')]
+            w.writerow(['원문'] + kb)
+            for i, t in enumerate(data['test200b']):
+                w.writerow([t] + [outs[k][i] for k in kb])
         print(f'  시드 {seed} 끝 ({time.time() - t0:.0f}s)')
 
     s = summarize(results)

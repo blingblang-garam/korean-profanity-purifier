@@ -11,7 +11,8 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FINAL = os.path.join(HERE, 'saved', 'final')
+import sys
+FINAL = os.path.join(HERE, 'saved', 'final_v3' if 'v3' in sys.argv[1:] else 'final')   # python make_figures.py v3
 
 for name in ['AppleGothic', 'Apple SD Gothic Neo', 'NanumGothic', 'Noto Sans CJK KR', 'Malgun Gothic']:
     if any(name == f.name for f in font_manager.fontManager.ttflist):
@@ -43,8 +44,9 @@ def main():
     # ① 실제 욕설 200문장: J (심판) / J_lex (패턴 잔존) 시스템별
     systems = [('E1 금칙어 사전', 'E1\n사전'), ('E3 양방향+고정치환', 'E3\n고정치환'), ('E4 양방향+RNNLM(문장)', 'E4 (1차)\n문장 채점'),
                ('E4a +국소 채점', 'E4a\n+국소'), ('E4b +계열 후보', 'E4b\n+계열'), ('E4c +국소+계열', 'E4c\n+국소+계열'),
-               ('E9 LSTM탐지+LSTM LM(국소+계열)', 'E9\nLSTM')]
-    fig, axes = plt.subplots(1, 2, figsize=(13, 4.6))
+               ('E9 LSTM탐지+LSTM LM(국소+계열)', 'E9\nLSTM'), ('E10 E9+밈·비속어 사전 검색', 'E10\n+사전 검색')]
+    systems = [x for x in systems if f'순화/{x[0]}/J' in S]
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4.6))
     for ax, metric, title in [(axes[0], 'J', 'J = STA × SIM × FL (심판 = 글자 n-gram 분류기)'),
                               (axes[1], 'J_lex', 'J_lex (STA = 비속어 패턴이 안 남았는가)')]:
         ms = [g(f'순화/{k}/{metric}')[0] for k, _ in systems]

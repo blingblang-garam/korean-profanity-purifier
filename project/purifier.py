@@ -70,13 +70,13 @@ def _josa(word, particle):
     return particle if first[particle] == has_jong else JOSA_PAIRS[particle]
 
 
-def family_match(word, max_dist=0.34):
+def family_match(word, max_dist=0.34, family=None):
     """구간 글자열 → (가장 가까운 비속어 계열의 순화어 목록, 거리). 숫자·기호 삽입(시1발)은 지우고 비교."""
     toks = [t for t in decompose(_NOISE.sub('', word))[0] if t != '▁']
     if not toks:
         return [], 1.0
     scored = {}
-    for form, clean in FAMILY:
+    for form, clean in (FAMILY if family is None else family):
         d = _edit(toks, form) / max(len(toks), len(form))
         scored[clean] = min(scored.get(clean, 1.0), d)
     best = min(scored.values())
@@ -85,7 +85,7 @@ def family_match(word, max_dist=0.34):
     return sorted(c for c, d in scored.items() if d <= best + 1e-9), best
 
 
-def family_candidates(span, overlap=None):
+def family_candidates(span, overlap=None, family=None, nouns=None):
     """구간(어절) → (순화 후보, 계열 거리).
     - 끝에 조사가 붙어 있으면 떼고 맞춰 본 뒤 순화어에 다시 붙인다 (새끼들이 → 사람들이). 부사·서술어에는 안 붙인다.
     - 어절에 정상 글자가 섞여 있으면(노가다새끼들아) 가장 잘 맞는 부분만 바꾸고 나머지는 남긴다.
@@ -102,17 +102,17 @@ def family_candidates(span, overlap=None):
                 continue
             options = [(piece, '')] + [(piece[:-len(p)], p) for p in PARTICLES if piece.endswith(p) and len(piece) > len(p)]
             for stem, particle in options:
-                cleans, d = family_match(stem)
+                cleans, d = family_match(stem, family=family)
                 if not cleans:
                     continue
                 cost = d + 0.15 * (n - len(piece))            # 어절을 많이 덮을수록 유리
                 if best is None or cost < best - 1e-9:
                     pre, post = span[:i], span[j:]
-                    if pre and family_match(pre)[0]:              # 앞 조각도 비속어면 지움 (개빡치게, 병신새끼들)
+                    if pre and family_match(pre, family=family)[0]:              # 앞 조각도 비속어면 지움 (개빡치게, 병신새끼들)
                         pre = ''
                     pre = pre + ' ' if len(pre) >= 2 else pre
                     best, best_d = cost, d
-                    out = [pre + c + (_josa(c, particle) if c in NOUN_CLEANS else '') + post for c in cleans]
+                    out = [pre + c + (_josa(c, particle) if c in (nouns or NOUN_CLEANS) else '') + post for c in cleans]
     return out, best_d
 
 
@@ -147,7 +147,7 @@ def _join(left, mid, right):
 
 class Purifier:
     def __init__(self, detector, lm, vocab, thr=0.5, mode='lm', recheck=True, keep_original=True,
-                 score='sentence', family=False, window=8):
+                 score='sentence', family=False, window=8, lexicon=None):
         """mode='lm' → E4(언어 모델 후보 선택), mode='fixed' → E2/E3(고정 치환)
         [v2] score='local' → 바꿔 넣은 자리부터 뒤 window 자모까지만 평균 교차 엔트로피로 채점
              family=True  → 구간과 같은 비속어 계열의 순화어(+조사)만 후보로 (못 맞추면 전체 목록)"""
@@ -156,6 +156,10 @@ class Purifier:
         self.recheck, self.keep_original = recheck, keep_original
         self.score, self.family, self.window = score, family, window
         self.unknown_thr = 0.9
+        # [v3+] 밈·신조어 사전: 보호 목록 + 욕설·비하 계열 추가 (lexicon.py)
+        self.lexicon = lexicon
+        self.fam = FAMILY + (lexicon.family() if lexicon else [])
+        self.nouns = NOUN_CLEANS | (lexicon.nouns() if lexicon else set())
 
     @staticmethod
     def _eojeol_units(text, spans):
@@ -210,6 +214,14 @@ class Purifier:
     def purify(self, text, verbose=False):
         text, spans, probs = self.detect(text)
         log = []
+        if self.lexicon is not None:                     # 탐지기 ∪ 사전 검색
+            extra = [sp for sp in self.lexicon.find_spans(text)
+                     if not any(sp[0] < e and s < sp[1] for s, e in spans)]
+            if extra:
+                for s, e in extra:
+                    probs[s:e] = [1.0] * (e - s)
+                spans = sorted(spans + extra)
+                log.append('사전 검색으로 추가: ' + ', '.join(repr(text[s:e]) for s, e in extra))
         if not spans:                                    # 분기: 비속어 없으면 원문 그대로
             return {'input': text, 'output': text, 'spans': [], 'log': log}
 
@@ -228,9 +240,18 @@ class Purifier:
 
             keep = self.keep_original
             if self.family:
-                fam, d = family_candidates(span, (ds - s, de - s))
+                if self.lexicon is not None:
+                    nxt = right.strip().split(' ')[0] if right.strip() else ''
+                    hit = self.lexicon.protect(span, nxt)
+                    if hit:
+                        log.append(f'{span!r} 유지 (사전: {hit["kind"]} {hit["head"]!r})')
+                        continue
+                fam, d = family_candidates(span, (ds - s, de - s), self.fam, self.nouns)
                 if fam:
-                    cands = fam + ['']
+                    # 사전의 비하 표현(짱깨, 틀딱)은 지우지 않고 중립 표현으로 바꾼다 (지우면 누구 얘기인지 사라짐)
+                    slur = self.lexicon is not None and any(
+                        f in span for e in self.lexicon.entries if e['kind'] == '비하' for f in e['forms'] if len(f) >= 2)
+                    cands = fam if slur and all(fam) else fam + ['']
                     keep = keep and d > 0.2              # 사전 형태와 거의 같은 확실한 비속어는 원래 표현을 후보에서 뺀다
                 elif max(probs[ds:de]) >= self.unknown_thr:
                     cands = ['']                          # 계열 모름 + 탐지기 확신 → 어절 삭제 / 원래 표현 비교
