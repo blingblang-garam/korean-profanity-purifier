@@ -275,6 +275,10 @@ def run_seed(seed, data, vocab, judge, ref, args, t0):
         'E9 LSTM탐지+LSTM LM(국소+계열)': Purifier(bl, lstm_lm, vocab, score='local', family=True).purify,
         'E10 E9+밈·비속어 사전 검색': Purifier(bl, lstm_lm, vocab, score='local', family=True, lexicon=Lexicon()).purify,
     }
+    if args.data == 'v3' and os.path.exists(os.path.join(OUT, 'usage_lstm.pkl')):
+        from usage_model import UsageTagger
+        pur['E11 E10+용법·강도'] = Purifier(bl, lstm_lm, vocab, score='local', family=True, lexicon=Lexicon(),
+                                         usage=UsageTagger(vocab, os.path.join(OUT, 'usage_lstm.pkl'))).purify
     jp = judge.prob
     outs_all = {}
     # 순화: 개발 중에 출력을 보며 고친 200문장 / 순화B: test 절반에서 새로 뽑아 개발 중 한 번도 안 본 200문장

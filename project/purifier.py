@@ -53,6 +53,19 @@ def _edit(a, b):
     return prev[-1]
 
 
+# ── [v4] 용법·강도에 맞춘 후보 (usage_model.py의 분류 결과 사용) ──
+INTENS = {'중': ['정말', '너무', '진짜'], '강': ['진짜 너무', '완전', '엄청']}
+EXCL_C = {'중': ['아', '아 진짜'], '강': ['아오', '아 진짜']}
+_STRONG_PREFIX = re.compile(r'^(개|씹|좆)[가-힣]')
+
+
+def intensity(text, word, n_spans):
+    """강도 규칙: 접두 욕설이 붙은 어절(개빡친다), 같은 욕 반복(존나존나), 느낌표 2개 이상이면 '강', 아니면 '중'"""
+    if _STRONG_PREFIX.match(word) or text.count('!') >= 2 or re.search(r'(존나|ㅈㄴ|씨발){2}', text):
+        return '강'
+    return '중'
+
+
 JOSA_PAIRS = {'이': '가', '가': '이', '은': '는', '는': '은', '을': '를', '를': '을', '아': '야', '야': '아',
               '이랑': '랑', '랑': '이랑', '이나': '나', '나': '이나'}
 
@@ -147,7 +160,7 @@ def _join(left, mid, right):
 
 class Purifier:
     def __init__(self, detector, lm, vocab, thr=0.5, mode='lm', recheck=True, keep_original=True,
-                 score='sentence', family=False, window=8, lexicon=None):
+                 score='sentence', family=False, window=8, lexicon=None, usage=None):
         """mode='lm' → E4(언어 모델 후보 선택), mode='fixed' → E2/E3(고정 치환)
         [v2] score='local' → 바꿔 넣은 자리부터 뒤 window 자모까지만 평균 교차 엔트로피로 채점
              family=True  → 구간과 같은 비속어 계열의 순화어(+조사)만 후보로 (못 맞추면 전체 목록)"""
@@ -160,6 +173,22 @@ class Purifier:
         self.lexicon = lexicon
         self.fam = FAMILY + (lexicon.family() if lexicon else [])
         self.nouns = NOUN_CLEANS | (lexicon.nouns() if lexicon else set())
+        self.usage = usage                       # [v4] usage_model.UsageTagger
+
+    @staticmethod
+    def _usage_cands(lab, lvl, fam):
+        """용법·강도 → 후보. 지칭은 계열 후보(사람 …) 그대로, 나머지는 강도를 살리는 표현을 더한다."""
+        pure = all(c in INTENS['중'] or c in ('아',) for c in fam)      # 어절 전체가 강조어·감탄사뿐 (존나, 씨발)
+        if lab == '감탄':
+            return EXCL_C[lvl] + ([] if pure else fam)
+        if lab == '강조':
+            if pure:
+                return INTENS[lvl]
+            # 개빡친다: 접두 '개'(강조)는 강도 부사로 살리고 나머지는 계열 순화어 → '진짜 너무 화난다'
+            return [a + ' ' + c for a in INTENS[lvl][:2] for c in fam] + fam
+        if lab == '모욕' and lvl == '강':
+            return ['진짜 ' + c for c in fam] + fam
+        return fam
 
     @staticmethod
     def _eojeol_units(text, spans):
@@ -252,6 +281,14 @@ class Purifier:
                     slur = self.lexicon is not None and any(
                         f in span for e in self.lexicon.entries if e['kind'] == '비하' for f in e['forms'] if len(f) >= 2)
                     cands = fam if slur and all(fam) else fam + ['']
+                    if self.usage is not None and not slur:
+                        lab, _ = self.usage.predict(text, ds, de)
+                        lvl = intensity(text, span, len(units))
+                        cands = self._usage_cands(lab, lvl, fam) + ['']
+                        log.append(f'{span!r} 용법 {lab} · 강도 {lvl}')
+                        prev = left.split()[-1] if left.split() else ''
+                        kept = [c for c in cands if not (c and c.split()[0] == prev)]   # '진짜 진짜 화난다' 방지
+                        cands = kept if any(kept) else cands
                     keep = keep and d > 0.2              # 사전 형태와 거의 같은 확실한 비속어는 원래 표현을 후보에서 뺀다
                 elif max(probs[ds:de]) >= self.unknown_thr:
                     cands = ['']                          # 계열 모름 + 탐지기 확신 → 어절 삭제 / 원래 표현 비교

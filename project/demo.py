@@ -18,13 +18,13 @@ import numpy as np
 from jamo import normalize, decompose
 from loader import JamoVocab
 from models import RnnDetector, SentenceLM, LstmSentenceLM
-from purifier import Purifier, dictionary_baseline, family_candidates
+from purifier import Purifier, dictionary_baseline, family_candidates, intensity
 from lexicon import Lexicon
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FINAL = os.path.join(HERE, 'saved', 'final_v3')       # v3 모델 (없으면 --models saved/final 로 v2)
 
-EXAMPLES = ['짱깨들이 또 시끄럽네', '오늘 진짜 킹받네', '시1발 오늘 존나 덥네', '그만 부들거려 노가다새끼들아', '실업급여 허위로 타먹은적 있는 새끼들은 돌 던질 자격없음',
+EXAMPLES = ['씨발 또 버그네', '오늘 씨발 덥네', '팀플 진짜 개빡친다', '짱깨들이 또 시끄럽네', '오늘 진짜 킹받네', '시1발 오늘 존나 덥네', '그만 부들거려 노가다새끼들아', '실업급여 허위로 타먹은적 있는 새끼들은 돌 던질 자격없음',
             '꼴리지는 않고 그냥 존나 귀엽다', 'ㅅㅂ 과제 ㅈㄴ 많아', '새끼 고양이가 너무 귀엽다', '시발역에서 내렸다',
             '개나리가 피었다', '팀플 진짜 개빡친다', '저 ㅅㄲ 왜 저래']
 
@@ -49,9 +49,14 @@ def load_models(seed_dir):
         '1차 방식 (문장 퍼플렉서티)': Purifier(m['양방향_RNN'], rnn_lm, vocab),
         '양방향 RNN + RNN LM (국소+계열)': Purifier(m['양방향_RNN'], rnn_lm, vocab, score='local', family=True),
         '양방향 LSTM + LSTM LM (국소+계열)': Purifier(m['양방향_LSTM'], lstm_lm, vocab, score='local', family=True),
-        '최종: LSTM + 밈·비속어 사전 검색': Purifier(m['양방향_LSTM'], lstm_lm, vocab, score='local', family=True,
-                                            lexicon=Lexicon()),
+        'LSTM + 밈·비속어 사전 검색': Purifier(m['양방향_LSTM'], lstm_lm, vocab, score='local', family=True,
+                                         lexicon=Lexicon()),
     }
+    upath = os.path.join(os.path.dirname(seed_dir), 'usage_lstm.pkl')
+    if os.path.exists(upath):                           # [v4] 용법 분류기가 있으면 최종 = 사전 검색 + 용법·강도
+        from usage_model import UsageTagger
+        systems['최종: + 용법·강도 (강조·감탄·지칭·모욕)'] = Purifier(
+            m['양방향_LSTM'], lstm_lm, vocab, score='local', family=True, lexicon=Lexicon(), usage=UsageTagger(vocab, upath))
     return vocab, systems
 
 
@@ -91,6 +96,14 @@ def analyze(text, systems, main_key):
         if fam:
             slur = L is not None and any(f in word for x in L.entries if x['kind'] == '비하' for f in x['forms'] if len(f) >= 2)
             cands = fam if slur and all(fam) else fam + ['']
+            if p.usage is not None and not slur:
+                lab, prob = p.usage.predict(norm, ds, de)
+                lvl = intensity(norm, word, 0)
+                item['usage'] = f'{lab} ({prob.max():.2f}) · 강도 {lvl}'
+                cands = Purifier._usage_cands(lab, lvl, fam) + ['']
+                prev = left.split()[-1] if left.split() else ''
+                kept = [c for c in cands if not (c and c.split()[0] == prev)]
+                cands = kept if any(kept) else cands
             if d > 0.2:
                 cands.append(word)
         else:
@@ -119,11 +132,12 @@ button{font-size:18px;padding:0 22px;border:0;border-radius:10px;background:var(
 .heat span{display:inline-block;font-size:24px;padding:4px 2px;border-radius:4px;min-width:14px;text-align:center}
 .sys{display:grid;grid-template-columns:260px 1fr;gap:6px 14px;font-size:18px;align-items:baseline}.sys .n{color:var(--sub);font-size:14px}
 table{border-collapse:collapse;width:100%;font-size:16px}td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left}
-th{color:var(--sub);font-weight:600;font-size:13px}tr.best td{font-weight:700;color:var(--acc)}.lex{font-size:14px;color:#2f6f9f;margin:4px 0 8px}.lex .dist{color:var(--sub);font-size:12px}.keep{font-size:16px;color:var(--acc);font-weight:600}
+th{color:var(--sub);font-weight:600;font-size:13px}tr.best td{font-weight:700;color:var(--acc)}.use{display:inline-block;font-size:13px;padding:2px 8px;border-radius:10px;background:#eef5f0;color:var(--acc);margin-left:6px}
+.lex{font-size:14px;color:#2f6f9f;margin:4px 0 8px}.lex .dist{color:var(--sub);font-size:12px}.keep{font-size:16px;color:var(--acc);font-weight:600}
 .jamo{font-family:ui-monospace,monospace;font-size:13px;color:var(--sub);word-break:break-all}
 @media (max-width:640px){.sys{grid-template-columns:1fr}}
 </style></head><body><main>
-<h1>문맥 보존형 비속어 순화기</h1><p class="lead">탐지(양방향 LSTM + 밈·비속어 사전 검색) → 어절 단위 구간 → 같은 계열 순화어 후보 → 언어 모델 국소 퍼플렉서티로 선택 → 재검증</p>
+<h1>문맥 보존형 비속어 순화기</h1><p class="lead">탐지(양방향 LSTM + 밈·비속어 사전 검색) → 어절 단위 구간 → 용법·강도 분류 → 같은 계열 순화어 후보 → 언어 모델 국소 퍼플렉서티로 선택 → 재검증</p>
 <div class="row"><input id="q" placeholder="문장을 입력하세요" autofocus><button onclick="go()">순화</button></div>
 <div class="ex" id="ex"></div><div id="res"></div></main>
 <script>
@@ -138,7 +152,7 @@ const inLex=i=>d.lexspans.some(([a,b])=>i>=a&&i<b);
 [...d.input].forEach((ch,i)=>{const p=main.probs[i]||0;h+='<span style="background:rgba(192,57,43,'+p.toFixed(2)+');color:'+(p>.55?'#fff':'inherit')+(inLex(i)?';outline:2px solid #2f6f9f':'')+'" title="'+p+'">'+(ch===' '?'&nbsp;':esc(ch))+'</span>'});
 h+='</div>'+(d.lexspans.length?'<p class="jamo" style="color:#2f6f9f">파란 테두리 = 탐지기는 놓쳤지만 사전 검색으로 찾은 글자</p>':'')+'<p class="jamo">자모 입력: '+esc(d.jamo)+'</p></div>';
 if(d.table.length){h+='<div class="card"><h2>② 후보 채점 (국소 퍼플렉서티, 낮을수록 자연스러움)</h2>';
-d.table.forEach(t=>{h+='<p>어절 <b>'+esc(t.word)+'</b> (탐지: '+esc(t.detected)+(t.family_dist!==undefined?', 계열 거리 '+t.family_dist:'')+')</p>';
+d.table.forEach(t=>{h+='<p>어절 <b>'+esc(t.word)+'</b> (탐지: '+esc(t.detected)+(t.family_dist!==undefined?', 계열 거리 '+t.family_dist:'')+')'+(t.usage?' <span class="use">용법 '+esc(t.usage)+'</span>':'')+'</p>';
 if(t.lex.length){h+='<p class="lex">사전 검색: '+t.lex.map(x=>'<b>'+esc(x.head)+'</b> ['+esc(x.kind)+'] '+esc(x.meaning)+(x.kind==='욕설'||x.kind==='비하'?' → '+esc(x.clean):'')+' <span class="dist">거리 '+x.dist+'</span>').join(' · ')+'</p>'}
 if(t.protected){h+='<p class="keep">그대로 둠 — 사전 보호 항목: '+esc(t.protected)+'</p>';return}
 h+='<table><tr><th>후보</th><th>바꾼 문장</th><th>점수</th></tr>';
