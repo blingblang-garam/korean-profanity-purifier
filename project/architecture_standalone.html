@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>순화기 구동 파이프라인</title>
+<style>
+:root{
+  --bg:#ffffff; --ink:#111418; --sub:#6b7076; --line:#d9dde1; --soft:#f5f7fa; --pale:#dceaf7;
+  --blue:#4e95d9; --blue-ink:#2c6fb0; --red:#ef2727; --green:#1f7a4d; --dark:#172b3a;
+  --font:"TAEBAEK font","Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font)}
+main{max-width:1320px;margin:0 auto;padding:24px 20px 48px}
+h1{font-size:28px;margin:0}
+h1 b{color:var(--blue)}
+.lead{color:var(--sub);margin:6px 0 18px;font-size:15px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.chip{font:inherit;font-size:14px;padding:6px 12px;border:1px solid var(--line);border-radius:18px;background:#fff;cursor:pointer}
+.chip.on{background:var(--dark);color:#fff;border-color:var(--dark)}
+.live{display:none;gap:6px;flex:1;min-width:260px}
+.live input{flex:1;font:inherit;font-size:16px;padding:8px 12px;border:1px solid var(--line);border-radius:10px}
+.btn{font:inherit;font-size:15px;padding:8px 14px;border:0;border-radius:10px;background:var(--blue);color:#fff;cursor:pointer}
+.btn.ghost{background:var(--soft);color:var(--ink)}
+.ctrl{display:flex;gap:8px;align-items:center;margin:4px 0 16px}
+.ctrl .step{font-size:15px;color:var(--sub);min-width:90px;text-align:center}
+.lane-title{font-size:15px;color:var(--sub);margin:8px 0 8px;display:flex;align-items:center;gap:8px}
+.lane-title b{color:var(--ink);font-size:17px}
+/* 학습 레인 */
+.train{display:grid;grid-template-columns:1.2fr 1.3fr 1fr 1fr 1fr 1fr;gap:10px;align-items:stretch}
+.tnode{background:var(--soft);border-radius:12px;padding:12px;font-size:14px;line-height:1.45;transition:background .4s, box-shadow .4s, transform .4s}
+.tnode h4{margin:0 0 4px;font-size:15px}
+.tnode .k{color:var(--sub);font-size:12px}
+.tnode.model{background:#fff;border:1.5px solid var(--line)}
+.tnode.lit{background:var(--pale);box-shadow:0 0 0 2px var(--blue) inset;transform:translateY(-2px)}
+.tarrow{display:flex;align-items:center;justify-content:center;color:var(--line);font-size:22px}
+.feed{display:grid;grid-template-columns:repeat(8,1fr);gap:10px;margin:6px 0 2px;height:26px}
+.feed span{display:flex;justify-content:center;align-items:center;font-size:12px;color:var(--sub);border-top:2px dashed transparent;transition:color .3s}
+.feed span.on{color:var(--blue-ink)}
+/* 추론 레인 */
+.infer{display:grid;grid-template-columns:repeat(8,1fr);gap:10px}
+.stage{position:relative;background:var(--soft);border-radius:12px;padding:12px 10px 12px;min-height:300px;opacity:.38;transition:opacity .45s, background .45s, box-shadow .45s}
+.stage.done{opacity:.9}
+.stage.on{opacity:1;background:#fff;box-shadow:0 0 0 2px var(--blue) inset, 0 6px 18px rgba(23,43,58,.10)}
+.stage .no{font-size:13px;color:var(--blue);font-weight:700}
+.stage h3{font-size:16px;margin:2px 0 2px}
+.stage .layer{font-size:11.5px;color:var(--sub);min-height:30px;line-height:1.35}
+.stage .body{margin-top:8px;font-size:13.5px;line-height:1.5;opacity:0;transition:opacity .45s}
+.stage.on .body,.stage.done .body{opacity:1}
+.stage:not(:last-child)::after{content:"";position:absolute;right:-9px;top:44px;width:8px;height:2px;background:var(--line)}
+.stage.done:not(:last-child)::after,.stage.on:not(:last-child)::after{background:var(--blue)}
+.big{font-size:17px;font-weight:700;word-break:keep-all}
+.red{color:var(--red)} .blue{color:var(--blue-ink)} .green{color:var(--green)} .muted{color:var(--sub)}
+.jamo{display:flex;flex-wrap:wrap;gap:3px}
+.jamo i{font-style:normal;display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:24px;padding:0 3px;border-radius:5px;background:#fff;border:1px solid var(--line);font-size:13px;opacity:0;transform:translateY(-6px);transition:opacity .25s, transform .25s, background .25s, color .25s}
+.jamo i.show{opacity:1;transform:none}
+.jamo i.hot{background:#c0392b;border-color:#c0392b;color:#fff}
+.probs{display:flex;align-items:flex-end;gap:2px;height:90px;border-bottom:1px solid var(--line);margin-top:6px}
+.probs div{flex:1;background:var(--red);height:0;border-radius:2px 2px 0 0;transition:height .5s}
+.chars{display:flex;gap:2px;font-size:11px;color:var(--sub)}
+.chars span{flex:1;text-align:center;overflow:hidden}
+.chain{display:flex;flex-direction:column;gap:3px;margin-top:8px}
+.chain span{font-size:11px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:2px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.unit{border-top:1px dashed var(--line);padding-top:6px;margin-top:6px}
+.unit:first-child{border-top:0;margin-top:0;padding-top:0}
+.tag{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:9px;background:var(--pale);color:var(--blue-ink);margin:2px 3px 0 0}
+.tag.r{background:#fdecec;color:var(--red)} .tag.g{background:#e7f3ec;color:var(--green)}
+.ubars{display:grid;grid-template-columns:30px 1fr 34px;gap:3px 5px;align-items:center;font-size:12px;margin-top:4px}
+.ubars .b{height:10px;background:var(--line);border-radius:5px;overflow:hidden}
+.ubars .b i{display:block;height:100%;width:0;background:var(--blue);transition:width .6s}
+.cands{display:grid;grid-template-columns:1fr 38px;gap:3px 6px;font-size:12.5px;margin-top:4px;align-items:center}
+.cands .c{position:relative;padding:2px 5px;border-radius:5px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cands .c i{position:absolute;inset:0 auto 0 0;width:0;background:var(--pale);z-index:0;transition:width .6s}
+.cands .c span{position:relative;z-index:1}
+.cands .c.best{color:var(--green);font-weight:700}
+.cands .c.best i{background:#e7f3ec}
+.cands .s{text-align:right;color:var(--sub)}
+.out{font-size:19px;font-weight:700;color:var(--blue-ink);margin:6px 0}
+.explain{margin-top:16px;display:grid;grid-template-columns:1fr 360px;gap:14px}
+.card{background:var(--soft);border-radius:12px;padding:14px 16px}
+.card h4{margin:0 0 6px;font-size:16px}
+.card p{margin:4px 0;font-size:14.5px;line-height:1.6}
+.formula{font-family:ui-monospace,Menlo,monospace;font-size:13px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:6px;white-space:pre-wrap}
+.note{font-size:12px;color:var(--sub);margin-top:14px}
+@media (max-width:1100px){
+  .infer{grid-template-columns:repeat(4,1fr)} .feed{display:none}
+  .train{grid-template-columns:repeat(3,1fr)} .tarrow{display:none} .explain{grid-template-columns:1fr}
+  .stage:nth-child(4n)::after{display:none}
+}
+@media (max-width:640px){ .infer{grid-template-columns:1fr 1fr} .train{grid-template-columns:1fr 1fr} main{padding:16px} }
+</style>
+</head>
+<body>
+<main>
+  <h1>비속어 순화기 · <b>구동 파이프라인</b></h1>
+  <p class="lead">위: 모델이 어디서 왔나(학습, 오프라인) · 아래: 문장 하나가 지나가는 길(추론, 실시간). 모든 숫자는 최종 모델(시드 0)이 실제로 낸 중간값입니다.</p>
+
+  <div class="bar" id="examples"></div>
+  <div class="bar"><div class="live" id="live"><input id="q" placeholder="문장을 입력하면 실제 모델로 추적합니다"><button class="btn" id="go">추적</button></div></div>
+
+  <div class="lane-title"><b>학습 파이프라인</b> · 오프라인, 시드 3개 병렬 (M1 CPU, 교재 NumPy)</div>
+  <div class="train">
+    <div class="tnode" id="t-data"><h4>실제 댓글</h4>깨끗한 댓글 3.8만<br>+ HateSpeech 비라벨 194만<div class="k">UnSmile · HateSpeech · K-MHaS</div></div>
+    <div class="tnode" id="t-gen"><h4>역방향 생성</h4>깨끗한 문장에 욕설을 끼워 넣어 라벨을 공짜로<div class="k">주입 · 변형(시1발, ㅅㅂ) · 붙여 쓰기 · 함정 음성 예시 · 용법 라벨</div></div>
+    <div class="tnode model" id="t-det"><h4>탐지기</h4>양방향 LSTM<div class="k">3.6만 문장 · dev 조기 종료</div></div>
+    <div class="tnode model" id="t-lex"><h4>밈·비속어 사전</h4><span id="lexn">50</span>항목<div class="k">욕설 · 비하 · 밈 · 정상 단어</div></div>
+    <div class="tnode model" id="t-use"><h4>용법 분류기</h4>양방향 LSTM<div class="k">2.2만 문장 · 4가지 용법</div></div>
+    <div class="tnode model" id="t-lm"><h4>언어 모델</h4>LSTM (ch06 Rnnlm)<div class="k">깨끗한 댓글 9만 문장</div></div>
+  </div>
+  <div class="feed" id="feed"></div>
+
+  <div class="lane-title"><b>구동(추론) 파이프라인</b> · 문장 하나, 약 50ms</div>
+  <div class="ctrl">
+    <button class="btn ghost" id="prev">◀ 이전</button>
+    <span class="step" id="stepno">0 / 8</span>
+    <button class="btn" id="next">다음 ▶</button>
+    <button class="btn ghost" id="play">▶▶ 자동 재생</button>
+    <span class="muted" style="font-size:13px">키보드 ← → / 스페이스</span>
+  </div>
+  <div class="infer" id="infer"></div>
+
+  <div class="explain">
+    <div class="card"><h4 id="ex-title">문장을 고르고 ‘다음’을 누르세요</h4><p id="ex-text">각 단계가 켜지면서 실제 중간값이 채워집니다.</p><div class="formula" id="ex-formula" style="display:none"></div></div>
+    <div class="card"><h4>결과 비교</h4><p class="muted" style="font-size:13px">입력</p><p id="cmp-in" class="big"></p><p class="muted" style="font-size:13px">금칙어 사전</p><p id="cmp-dict"></p><p class="muted" style="font-size:13px">최종 순화기</p><p id="cmp-out" class="out"></p></div>
+  </div>
+  <p class="note">교재 계층: TimeEmbedding · TimeLSTM(ch06) · TimeAffine · Rnnlm(ch06). 양방향은 TimeLSTM 두 개(정방향 + 길이 안에서만 뒤집은 역방향). 텐서 모양은 (배치 N, 자모 길이 T, 차원).</p>
+</main>
+
+<script id="examples-data" type="application/json">[{"raw": "씨발 또 버그네", "normalized": "씨발 또 버그네", "dict": "** 또 버그네", "jamo": [{"tok": "ㅆ", "char": 0, "p": 1.0}, {"tok": "ㅣ", "char": 0, "p": 1.0}, {"tok": "ㅂ", "char": 1, "p": 1.0}, {"tok": "ㅏ", "char": 1, "p": 1.0}, {"tok": "_ㄹ", "char": 1, "p": 1.0}, {"tok": "▁", "char": 2, "p": 0.0}, {"tok": "ㄸ", "char": 3, "p": 0.0}, {"tok": "ㅗ", "char": 3, "p": 0.0}, {"tok": "▁", "char": 4, "p": 0.0}, {"tok": "ㅂ", "char": 5, "p": 0.0}, {"tok": "ㅓ", "char": 5, "p": 0.0}, {"tok": "ㄱ", "char": 6, "p": 0.0}, {"tok": "ㅡ", "char": 6, "p": 0.0}, {"tok": "ㄴ", "char": 7, "p": 0.004}, {"tok": "ㅔ", "char": 7, "p": 0.01}], "char_probs": [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01], "det_spans": [[0, 2]], "lex_spans": [], "units": [{"word": "씨발", "start": 0, "end": 2, "detected": "씨발", "family": ["너무", "아", "진짜"], "family_dist": 0.0, "usage": "감탄", "usage_probs": [0.237, 0.763, 0.0, 0.0], "intensity": "중", "cands": [{"cand": "아 진짜", "sent": "아 진짜 또 버그네", "score": 6.74}, {"cand": "아", "sent": "아 또 버그네", "score": 10.92}, {"cand": "", "sent": "또 버그네", "score": 14.75}], "recheck": [{"cand": "아 진짜", "max_p": 0.19, "pass": true}], "chosen": "아 진짜", "lex_hits": [{"head": "ㅅㅂㄹㅁ", "kind": "욕설", "meaning": "감탄사로 쓰는 욕", "clean": ["아"], "dist": 0.2}, {"head": "신발", "kind": "정상", "meaning": "발에 신는 것", "clean": [], "dist": 0.33}], "from_lexicon": false}], "output": "아 진짜 또 버그네", "log": ["'씨발' 용법 감탄 · 강도 중", "'씨발' → '아 진짜'  (ppl 6.74, 1순위 '아 진짜' 6.74)"], "shapes": {"T": 15, "V": 113}, "lexicon_size": 50}, {"raw": "그만 부들거려 노가다새끼들아", "normalized": "그만 부들거려 노가다새끼들아", "dict": "그만 부들거려 노가다**", "jamo": [{"tok": "ㄱ", "char": 0, "p": 0.0}, {"tok": "ㅡ", "char": 0, "p": 0.0}, {"tok": "ㅁ", "char": 1, "p": 0.0}, {"tok": "ㅏ", "char": 1, "p": 0.0}, {"tok": "_ㄴ", "char": 1, "p": 0.0}, {"tok": "▁", "char": 2, "p": 0.0}, {"tok": "ㅂ", "char": 3, "p": 0.0}, {"tok": "ㅜ", "char": 3, "p": 0.0}, {"tok": "ㄷ", "char": 4, "p": 0.0}, {"tok": "ㅡ", "char": 4, "p": 0.0}, {"tok": "_ㄹ", "char": 4, "p": 0.0}, {"tok": "ㄱ", "char": 5, "p": 0.0}, {"tok": "ㅓ", "char": 5, "p": 0.0}, {"tok": "ㄹ", "char": 6, "p": 0.0}, {"tok": "ㅕ", "char": 6, "p": 0.0}, {"tok": "▁", "char": 7, "p": 0.0}, {"tok": "ㄴ", "char": 8, "p": 0.0}, {"tok": "ㅗ", "char": 8, "p": 0.0}, {"tok": "ㄱ", "char": 9, "p": 0.0}, {"tok": "ㅏ", "char": 9, "p": 0.0}, {"tok": "ㄷ", "char": 10, "p": 0.0}, {"tok": "ㅏ", "char": 10, "p": 0.0}, {"tok": "ㅅ", "char": 11, "p": 1.0}, {"tok": "ㅐ", "char": 11, "p": 1.0}, {"tok": "ㄲ", "char": 12, "p": 1.0}, {"tok": "ㅣ", "char": 12, "p": 1.0}, {"tok": "ㄷ", "char": 13, "p": 1.0}, {"tok": "ㅡ", "char": 13, "p": 1.0}, {"tok": "_ㄹ", "char": 13, "p": 1.0}, {"tok": "ㅇ", "char": 14, "p": 1.0}, {"tok": "ㅏ", "char": 14, "p": 1.0}], "char_probs": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0], "det_spans": [[11, 15]], "lex_spans": [], "units": [{"word": "노가다새끼들아", "start": 8, "end": 15, "detected": "새끼들아", "family": ["노가다 사람들아"], "family_dist": 0.0, "usage": "지칭", "usage_probs": [0.0, 0.0, 1.0, 0.0], "intensity": "중", "cands": [{"cand": "노가다 사람들아", "sent": "그만 부들거려 노가다 사람들아", "score": 5.76}, {"cand": "", "sent": "그만 부들거려", "score": 11.89}], "recheck": [{"cand": "노가다 사람들아", "max_p": 0.013, "pass": true}], "chosen": "노가다 사람들아", "lex_hits": [{"head": "또라이", "kind": "욕설", "meaning": "정신이 이상한 사람을 낮잡음", "clean": ["이상한 사람"], "dist": 0.6}, {"head": "개새끼", "kind": "욕설", "meaning": "상대를 낮잡는 욕", "clean": ["사람"], "dist": 0.67}], "from_lexicon": false}], "output": "그만 부들거려 노가다 사람들아", "log": ["'노가다새끼들아' 용법 지칭 · 강도 중", "'노가다새끼들아' → '노가다 사람들아'  (ppl 5.76, 1순위 '노가다 사람들아' 5.76)"], "shapes": {"T": 31, "V": 113}, "lexicon_size": 50}, {"raw": "짱깨들이 또 시끄럽네", "normalized": "짱깨들이 또 시끄럽네", "dict": "짱깨들이 또 시끄럽네", "jamo": [{"tok": "ㅉ", "char": 0, "p": 0.0}, {"tok": "ㅏ", "char": 0, "p": 0.0}, {"tok": "_ㅇ", "char": 0, "p": 0.0}, {"tok": "ㄲ", "char": 1, "p": 0.002}, {"tok": "ㅐ", "char": 1, "p": 0.001}, {"tok": "ㄷ", "char": 2, "p": 0.0}, {"tok": "ㅡ", "char": 2, "p": 0.0}, {"tok": "_ㄹ", "char": 2, "p": 0.0}, {"tok": "ㅇ", "char": 3, "p": 0.0}, {"tok": "ㅣ", "char": 3, "p": 0.0}, {"tok": "▁", "char": 4, "p": 0.0}, {"tok": "ㄸ", "char": 5, "p": 0.0}, {"tok": "ㅗ", "char": 5, "p": 0.0}, {"tok": "▁", "char": 6, "p": 0.0}, {"tok": "ㅅ", "char": 7, "p": 0.0}, {"tok": "ㅣ", "char": 7, "p": 0.001}, {"tok": "ㄲ", "char": 8, "p": 0.0}, {"tok": "ㅡ", "char": 8, "p": 0.0}, {"tok": "ㄹ", "char": 9, "p": 0.0}, {"tok": "ㅓ", "char": 9, "p": 0.0}, {"tok": "_ㅂ", "char": 9, "p": 0.0}, {"tok": "ㄴ", "char": 10, "p": 0.005}, {"tok": "ㅔ", "char": 10, "p": 0.008}], "char_probs": [0.0, 0.002, 0.0, 0.0, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.008], "det_spans": [], "lex_spans": [[0, 2]], "units": [{"word": "짱깨들이", "start": 0, "end": 4, "detected": "짱깨", "family": ["중국인들이"], "family_dist": 0.0, "cands": [{"cand": "중국인들이", "sent": "중국인들이 또 시끄럽네", "score": 6.33}], "recheck": [{"cand": "중국인들이", "max_p": 0.0, "pass": true}], "chosen": "중국인들이", "lex_hits": [{"head": "짱깨", "kind": "비하", "meaning": "중국인 비하", "clean": ["중국인"], "dist": 0.1}, {"head": "쪽바리", "kind": "비하", "meaning": "일본인 비하", "clean": ["일본인"], "dist": 0.6}], "from_lexicon": true}], "output": "중국인들이 또 시끄럽네", "log": ["사전 검색으로 추가: '짱깨'", "'짱깨들이' → '중국인들이'  (ppl 6.33, 1순위 '중국인들이' 6.33)"], "shapes": {"T": 23, "V": 113}, "lexicon_size": 50}, {"raw": "개나리가 피었다", "normalized": "개나리가 피었다", "dict": "**나리가 피었다", "jamo": [{"tok": "ㄱ", "char": 0, "p": 0.91}, {"tok": "ㅐ", "char": 0, "p": 0.823}, {"tok": "ㄴ", "char": 1, "p": 0.0}, {"tok": "ㅏ", "char": 1, "p": 0.0}, {"tok": "ㄹ", "char": 2, "p": 0.0}, {"tok": "ㅣ", "char": 2, "p": 0.0}, {"tok": "ㄱ", "char": 3, "p": 0.0}, {"tok": "ㅏ", "char": 3, "p": 0.0}, {"tok": "▁", "char": 4, "p": 0.0}, {"tok": "ㅍ", "char": 5, "p": 0.0}, {"tok": "ㅣ", "char": 5, "p": 0.0}, {"tok": "ㅇ", "char": 6, "p": 0.0}, {"tok": "ㅓ", "char": 6, "p": 0.0}, {"tok": "_ㅆ", "char": 6, "p": 0.0}, {"tok": "ㄷ", "char": 7, "p": 0.0}, {"tok": "ㅏ", "char": 7, "p": 0.0}], "char_probs": [0.91, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "det_spans": [[0, 1]], "lex_spans": [], "units": [{"word": "개나리가", "start": 0, "end": 4, "detected": "개", "protected": {"kind": "정상", "head": "개나리", "meaning": "봄꽃"}, "lex_hits": [{"head": "개나리", "kind": "정상", "meaning": "봄꽃", "clean": [], "dist": 0.1}, {"head": "개구리", "kind": "정상", "meaning": "동물", "clean": [], "dist": 0.5}], "from_lexicon": false}], "output": "개나리가 피었다", "log": ["'개나리가' 유지 (사전: 정상 '개나리')"], "shapes": {"T": 16, "V": 113}, "lexicon_size": 50}, {"raw": "팀플 진짜 개빡친다", "normalized": "팀플 진짜 개빡친다", "dict": "팀플 진짜 ****", "jamo": [{"tok": "ㅌ", "char": 0, "p": 0.0}, {"tok": "ㅣ", "char": 0, "p": 0.0}, {"tok": "_ㅁ", "char": 0, "p": 0.0}, {"tok": "ㅍ", "char": 1, "p": 0.0}, {"tok": "ㅡ", "char": 1, "p": 0.0}, {"tok": "_ㄹ", "char": 1, "p": 0.0}, {"tok": "▁", "char": 2, "p": 0.0}, {"tok": "ㅈ", "char": 3, "p": 0.0}, {"tok": "ㅣ", "char": 3, "p": 0.0}, {"tok": "_ㄴ", "char": 3, "p": 0.0}, {"tok": "ㅉ", "char": 4, "p": 0.0}, {"tok": "ㅏ", "char": 4, "p": 0.0}, {"tok": "▁", "char": 5, "p": 0.0}, {"tok": "ㄱ", "char": 6, "p": 0.996}, {"tok": "ㅐ", "char": 6, "p": 0.999}, {"tok": "ㅃ", "char": 7, "p": 0.999}, {"tok": "ㅏ", "char": 7, "p": 0.999}, {"tok": "_ㄱ", "char": 7, "p": 0.998}, {"tok": "ㅊ", "char": 8, "p": 0.982}, {"tok": "ㅣ", "char": 8, "p": 0.933}, {"tok": "_ㄴ", "char": 8, "p": 0.952}, {"tok": "ㄷ", "char": 9, "p": 0.683}, {"tok": "ㅏ", "char": 9, "p": 0.906}], "char_probs": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.999, 0.999, 0.982, 0.906], "det_spans": [[6, 10]], "lex_spans": [], "units": [{"word": "개빡친다", "start": 6, "end": 10, "detected": "개빡친다", "family": ["화난다"], "family_dist": 0.0, "usage": "모욕", "usage_probs": [0.0, 0.0, 0.001, 0.999], "intensity": "강", "cands": [{"cand": "화난다", "sent": "팀플 진짜 화난다", "score": 5.93}, {"cand": "", "sent": "팀플 진짜", "score": 163.7}], "recheck": [{"cand": "화난다", "max_p": 0.0, "pass": true}], "chosen": "화난다", "lex_hits": [{"head": "개나리", "kind": "정상", "meaning": "봄꽃", "clean": [], "dist": 0.6}, {"head": "개강", "kind": "정상", "meaning": "학기 시작", "clean": [], "dist": 0.6}], "from_lexicon": false}], "output": "팀플 진짜 화난다", "log": ["'개빡친다' 용법 모욕 · 강도 강", "'개빡친다' → '화난다'  (ppl 5.93, 1순위 '화난다' 5.93)"], "shapes": {"T": 23, "V": 113}, "lexicon_size": 50}, {"raw": "시1발 오늘 존나 덥네", "normalized": "시1발 오늘 존나 덥네", "dict": "시1발 오늘 ** 덥네", "jamo": [{"tok": "ㅅ", "char": 0, "p": 0.976}, {"tok": "ㅣ", "char": 0, "p": 0.983}, {"tok": "1", "char": 1, "p": 0.981}, {"tok": "ㅂ", "char": 2, "p": 0.999}, {"tok": "ㅏ", "char": 2, "p": 1.0}, {"tok": "_ㄹ", "char": 2, "p": 0.999}, {"tok": "▁", "char": 3, "p": 0.0}, {"tok": "ㅇ", "char": 4, "p": 0.0}, {"tok": "ㅗ", "char": 4, "p": 0.0}, {"tok": "ㄴ", "char": 5, "p": 0.0}, {"tok": "ㅡ", "char": 5, "p": 0.0}, {"tok": "_ㄹ", "char": 5, "p": 0.0}, {"tok": "▁", "char": 6, "p": 0.0}, {"tok": "ㅈ", "char": 7, "p": 0.999}, {"tok": "ㅗ", "char": 7, "p": 0.996}, {"tok": "_ㄴ", "char": 7, "p": 0.997}, {"tok": "ㄴ", "char": 8, "p": 0.998}, {"tok": "ㅏ", "char": 8, "p": 0.999}, {"tok": "▁", "char": 9, "p": 0.0}, {"tok": "ㄷ", "char": 10, "p": 0.001}, {"tok": "ㅓ", "char": 10, "p": 0.007}, {"tok": "_ㅂ", "char": 10, "p": 0.0}, {"tok": "ㄴ", "char": 11, "p": 0.0}, {"tok": "ㅔ", "char": 11, "p": 0.001}], "char_probs": [0.983, 0.981, 1.0, 0.0, 0.0, 0.0, 0.0, 0.999, 0.999, 0.0, 0.007, 0.001], "det_spans": [[0, 3], [7, 9]], "lex_spans": [], "units": [{"word": "시1발", "start": 0, "end": 3, "detected": "시1발", "family": ["너무", "아", "진짜"], "family_dist": 0.0, "usage": "감탄", "usage_probs": [0.003, 0.997, 0.0, 0.0], "intensity": "중", "cands": [{"cand": "아 진짜", "sent": "아 진짜 오늘 정말 덥네", "score": 3.81}, {"cand": "", "sent": "오늘 정말 덥네", "score": 4.1}, {"cand": "아", "sent": "아 오늘 정말 덥네", "score": 4.5}], "recheck": [{"cand": "아 진짜", "max_p": 0.188, "pass": true}], "chosen": "아 진짜", "lex_hits": [{"head": "신발", "kind": "정상", "meaning": "발에 신는 것", "clean": [], "dist": 0.17}, {"head": "ㅅㅂㄹㅁ", "kind": "욕설", "meaning": "감탄사로 쓰는 욕", "clean": ["아"], "dist": 0.29}], "from_lexicon": false}, {"word": "존나", "start": 7, "end": 9, "detected": "존나", "family": ["너무", "정말", "진짜"], "family_dist": 0.0, "usage": "강조", "usage_probs": [1.0, 0.0, 0.0, 0.0], "intensity": "중", "cands": [{"cand": "정말", "sent": "시1발 오늘 정말 덥네", "score": 8.43}, {"cand": "진짜", "sent": "시1발 오늘 진짜 덥네", "score": 9.33}, {"cand": "너무", "sent": "시1발 오늘 너무 덥네", "score": 10.79}, {"cand": "", "sent": "시1발 오늘 덥네", "score": 31.84}], "recheck": [{"cand": "정말", "max_p": 0.0, "pass": true}], "chosen": "정말", "lex_hits": [{"head": "존잼", "kind": "밈", "meaning": "'존-' 강조 유행어(욕설로 보지 않음)", "clean": [], "dist": 0.33}, {"head": "존경", "kind": "정상", "meaning": "'존'으로 시작하는 정상 단어", "clean": [], "dist": 0.4}], "from_lexicon": false}], "output": "아 진짜 오늘 정말 덥네", "log": ["'존나' 용법 강조 · 강도 중", "'존나' → '정말'  (ppl 8.43, 1순위 '정말' 8.43)", "'시1발' 용법 감탄 · 강도 중", "'시1발' → '아 진짜'  (ppl 3.81, 1순위 '아 진짜' 3.81)"], "shapes": {"T": 24, "V": 113}, "lexicon_size": 50}]</script>
+<script>
+const STAGES = [
+  {id:'in',   name:'입력 · 정규화', layer:'NFC · 소문자 · 반복 축약', uses:[]},
+  {id:'jamo', name:'자모 분해', layer:'초성 · 중성 · 종성(_ㄴ) 토큰', uses:[]},
+  {id:'det',  name:'탐지기', layer:'TimeEmbedding → 양방향 TimeLSTM → TimeAffine → Sigmoid', uses:['t-det']},
+  {id:'lex',  name:'사전 검색', layer:'자모 편집 거리로 가장 가까운 항목', uses:['t-lex']},
+  {id:'fam',  name:'어절 · 계열', layer:'어절 단위 구간 + 비속어 계열 매칭', uses:['t-lex']},
+  {id:'use',  name:'용법 · 강도', layer:'양방향 TimeLSTM → 구간 평균 → Softmax(4)', uses:['t-use']},
+  {id:'lm',   name:'후보 채점', layer:'Rnnlm(LSTM) 국소 퍼플렉서티', uses:['t-lm']},
+  {id:'out',  name:'재검증 · 출력', layer:'바꾼 표현을 탐지기로 다시 검사', uses:['t-det']},
+];
+const EXPLAIN = {
+  in:  ['① 입력 · 정규화', '유니코드 정규화(NFC), 소문자화, ㅋㅋㅋㅋ → ㅋㅋ 같은 반복 축약, 허용하지 않는 기호 제거.', ''],
+  jamo:['② 자모 분해', '음절을 초성·중성·종성으로 쪼갠다. 종성은 _ㄹ처럼 따로 표시해 음절 경계를 지킨다. 그래서 씨발 / 시1발 / ㅅㅂ가 한두 토큰 차이가 된다.', '씨발 → ㅆ ㅣ ㅂ ㅏ _ㄹ\n시1발 → ㅅ ㅣ 1 ㅂ ㅏ _ㄹ'],
+  det: ['③ 탐지기 (자모마다 “이 위치가 비속어인가?”)', '교재 ch05 SimpleRnnlm의 출력층 Softmax(V)를 Sigmoid(1)로 바꾼 구조. 양방향이라 뒤 글자까지 보고 판단한다 (개나리 vs 개빡친다).', ''],
+  lex: ['④ 밈·비속어 사전 검색 (RAG의 ‘검색’ 부분)', '어절을 사전에서 찾아 정상 단어·밈이면 보호하고, 탐지기가 못 본 비하어는 여기서 찾아낸다. LLM 없이, 인터넷 없이 동작.', '거리 = 자모 편집 거리 / 긴 쪽 길이'],
+  fam: ['⑤ 어절 · 계열', '탐지 구간을 어절 경계까지 넓히고, 역방향 사전의 비속어 형태와 맞춰 같은 계열의 순화어만 후보로 남긴다. 조사는 떼었다가 받침에 맞게 다시 붙인다.', '새끼들이 → 사람들 + 이   ·   지랄이 → 난리 + 가'],
+  use: ['⑥ 용법 · 강도', '같은 욕이라도 문장에서 하는 일이 다르다. 욕설 구간의 은닉 상태 평균으로 강조·감탄·지칭·모욕을 고르고, 접두 욕설·반복·느낌표로 강도를 정한다.', '감탄 → 아 · 아 진짜 · 아오   강조 → 정말 · 너무 · 완전'],
+  lm:  ['⑦ 후보 채점 (LSTM 언어 모델)', '후보를 넣은 문장마다, 바꾼 자리부터 뒤 8자모까지의 교차 엔트로피 평균을 지수로 바꾼 국소 퍼플렉서티. 낮을수록 자연스럽다.', 'PPL_local = exp( (1/|W|) · Σ_{t∈W} −log p(x_t | x_<t) )'],
+  out: ['⑧ 재검증 · 출력', '골라 넣은 표현을 탐지기로 다시 검사해 여전히 비속어로 잡히면 다음 후보로 넘어간다. 통과한 문장이 최종 출력.', ''],
+};
+const USE = ['강조','감탄','지칭','모욕'];
+let DATA = JSON.parse(document.getElementById('examples-data').textContent || '[]');
+let cur = null, step = 0, timer = null;
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function buildShell(){
+  $('#infer').innerHTML = STAGES.map((s,i)=>`<div class="stage" id="st-${s.id}"><div class="no">${i+1}</div><h3>${s.name}</h3><div class="layer">${s.layer}</div><div class="body" id="b-${s.id}"></div></div>`).join('');
+  $('#feed').innerHTML = STAGES.map(s=>`<span id="f-${s.id}">${s.uses.length? '▼ '+({'t-det':'탐지기','t-lex':'사전','t-use':'용법 분류기','t-lm':'언어 모델'}[s.uses[0]]) : ''}</span>`).join('');
+}
+
+function render(t){
+  cur = t; step = 0;
+  $('#lexn').textContent = t.lexicon_size || 50;
+  $('#cmp-in').textContent = t.raw; $('#cmp-dict').textContent = t.dict; $('#cmp-out').textContent = '';
+  const n = t.normalized, T = t.shapes.T;
+  // ① 입력
+  $('#b-in').innerHTML = `<div class="muted">원문</div><div class="big">${esc(t.raw)}</div><div class="muted" style="margin-top:6px">정규화</div><div class="big">${esc(n)}</div>`;
+  // ② 자모
+  $('#b-jamo').innerHTML = `<div class="jamo">${t.jamo.map(j=>`<i data-p="${j.p}">${j.tok==='▁'?'␣':esc(j.tok)}</i>`).join('')}</div><div class="muted" style="margin-top:6px">T = ${T}개 토큰 · 어휘 ${t.shapes.V}</div>`;
+  // ③ 탐지기
+  const cps = t.char_probs;
+  $('#b-det').innerHTML = `<div class="probs">${cps.map(p=>`<div data-h="${Math.max(p*100,1)}"></div>`).join('')}</div><div class="chars">${[...n].map(c=>`<span>${c===' '?'·':esc(c)}</span>`).join('')}</div>
+    <div class="chain"><span>입력 (1, ${T}) 자모 ID</span><span>TimeEmbedding → (1, ${T}, 32)</span><span>양방향 TimeLSTM → (1, ${T}, 128)</span><span>TimeAffine → (1, ${T}, 1)</span><span>Sigmoid → 자모별 확률</span></div>
+    <div style="margin-top:6px">구간: ${t.det_spans.length? t.det_spans.map(([a,b])=>`<span class="tag r">${esc(n.slice(a,b))}</span>`).join('') : '<span class="muted">없음</span>'}</div>`;
+  const units = t.units;
+  const none = '<div class="muted">처리할 구간 없음</div>';
+  // ④ 사전
+  $('#b-lex').innerHTML = units.length ? units.map(u=>`<div class="unit"><b>${esc(u.word)}</b>${u.from_lexicon?' <span class="tag g">사전이 찾음</span>':''}${u.protected?` <span class="tag g">보호: ${esc(u.protected.kind)}</span>`:''}
+      ${u.lex_hits.map(h=>`<div style="font-size:12.5px">${esc(h.head)} <span class="tag ${h.kind==='욕설'||h.kind==='비하'?'r':'g'}">${esc(h.kind)}</span> <span class="muted">거리 ${h.dist}</span>${h.clean.length?` → ${esc(h.clean.join(', '))}`:''}</div>`).join('')}</div>`).join('') : none;
+  // ⑤ 계열
+  $('#b-fam').innerHTML = units.length ? units.map(u=>{
+      if(u.protected) return `<div class="unit"><b>${esc(u.word)}</b><div class="green">그대로 둠</div><div class="muted" style="font-size:12px">${esc(u.protected.head)} — ${esc(u.protected.meaning)}</div></div>`;
+      const w = u.word, d = u.detected, i = w.indexOf(d);
+      const hw = i>=0 ? esc(w.slice(0,i))+`<span class="red">${esc(d)}</span>`+esc(w.slice(i+d.length)) : esc(w);
+      return `<div class="unit"><div class="big">${hw}</div><div class="muted" style="font-size:12px">계열 거리 ${u.family_dist ?? '-'}</div>${(u.family||[]).map(c=>`<span class="tag">${esc(c)}</span>`).join('') || '<span class="muted">계열 없음</span>'}</div>`;
+    }).join('') : none;
+  // ⑥ 용법
+  $('#b-use').innerHTML = units.length ? units.map(u=>{
+      if(u.protected) return `<div class="unit"><b>${esc(u.word)}</b><div class="muted">보호 항목 — 건너뜀</div></div>`;
+      if(!u.usage_probs) return `<div class="unit"><b>${esc(u.word)}</b><div class="muted">비하 표현 → 중립 표현으로 (용법 분류 생략)</div></div>`;
+      return `<div class="unit"><b>${esc(u.word)}</b> <span class="tag">${esc(u.usage)}</span><span class="tag ${u.intensity==='강'?'r':''}">강도 ${esc(u.intensity)}</span>
+        <div class="ubars">${USE.map((l,k)=>`<span>${l}</span><div class="b"><i data-w="${(u.usage_probs[k]*100).toFixed(0)}"></i></div><span class="muted">${u.usage_probs[k].toFixed(2)}</span>`).join('')}</div></div>`;
+    }).join('') : none;
+  // ⑦ 후보
+  $('#b-lm').innerHTML = units.length ? units.map(u=>{
+      if(!u.cands) return `<div class="unit"><b>${esc(u.word)}</b><div class="muted">후보 없음 (그대로)</div></div>`;
+      const mx = Math.max(...u.cands.map(c=>c.score));
+      return `<div class="unit"><b>${esc(u.word)}</b><div class="cands">${u.cands.map((c,k)=>`<div class="c ${c.cand===u.chosen?'best':''}"><i data-w="${(100*(1-c.score/(mx*1.15))).toFixed(0)}"></i><span>${esc(c.cand||'(삭제)')}</span></div><div class="s">${c.score}</div>`).join('')}</div></div>`;
+    }).join('') : none;
+  // ⑧ 출력
+  $('#b-out').innerHTML = (units.length ? units.map(u=>{
+      if(!u.cands) return '';
+      const rc = (u.recheck||[]).map(r=>`<div style="font-size:12.5px">${esc(r.cand)} : 최대 p ${r.max_p} ${r.pass?'<span class="green">통과</span>':'<span class="red">탈락</span>'}</div>`).join('');
+      return `<div class="unit"><b>${esc(u.word)}</b> → <span class="green">${esc(u.chosen||'(삭제)')}</span>${rc||'<div class="muted" style="font-size:12px">삭제·원래 표현은 재검증 생략</div>'}</div>`;
+    }).join('') : '') + `<div class="muted" style="margin-top:8px">최종</div><div class="out">${esc(t.output)}</div>`;
+  go(0);
+}
+
+function go(k){
+  step = Math.max(0, Math.min(STAGES.length, k));
+  $('#stepno').textContent = `${step} / ${STAGES.length}`;
+  STAGES.forEach((s,i)=>{
+    const el = $('#st-'+s.id);
+    el.classList.toggle('on', i === step-1);
+    el.classList.toggle('done', i < step-1);
+    $('#f-'+s.id).classList.toggle('on', i === step-1 && s.uses.length > 0);
+  });
+  document.querySelectorAll('.tnode').forEach(n=>n.classList.remove('lit'));
+  if(step>0){ STAGES[step-1].uses.forEach(id=>{ $('#'+id).classList.add('lit'); $('#t-gen').classList.add('lit'); }); }
+  // 단계별 애니메이션
+  const active = step-1;
+  const reached = i => step-1 >= i;
+  document.querySelectorAll('#b-jamo .jamo i').forEach((el,i)=>{
+    if(reached(1)) setTimeout(()=>el.classList.add('show'), active===1? i*45 : 0); else el.classList.remove('show','hot');
+    if(reached(2)) setTimeout(()=>el.classList.toggle('hot', +el.dataset.p >= 0.5), active===2? 300 + i*25 : 0); else el.classList.remove('hot');
+  });
+  document.querySelectorAll('#b-det .probs div').forEach((el,i)=>{ el.style.height = reached(2) ? el.dataset.h+'%' : '0'; el.style.transitionDelay = active===2? (i*40)+'ms':'0ms'; });
+  document.querySelectorAll('#b-use .ubars i').forEach(el=>{ el.style.width = reached(5) ? el.dataset.w+'%' : '0'; });
+  document.querySelectorAll('#b-lm .cands i').forEach((el,i)=>{ el.style.width = reached(6) ? el.dataset.w+'%' : '0'; el.style.transitionDelay = active===6? (i*150)+'ms':'0ms'; });
+  $('#cmp-out').textContent = step >= STAGES.length && cur ? cur.output : '';
+  const ex = step===0 ? ['문장을 고르고 ‘다음’을 누르세요','각 단계가 켜지면서 실제 중간값이 채워집니다. 위쪽 학습 레인에서 그 단계가 쓰는 모델이 함께 켜집니다.',''] : EXPLAIN[STAGES[step-1].id];
+  $('#ex-title').textContent = ex[0]; $('#ex-text').textContent = ex[1];
+  $('#ex-formula').style.display = ex[2] ? 'block' : 'none'; $('#ex-formula').textContent = ex[2];
+}
+
+function stop(){ if(timer){ clearInterval(timer); timer=null; $('#play').textContent='▶▶ 자동 재생'; } }
+$('#next').onclick = ()=>{ stop(); go(step+1); };
+$('#prev').onclick = ()=>{ stop(); go(step-1); };
+$('#play').onclick = ()=>{
+  if(timer){ stop(); return; }
+  if(step >= STAGES.length) go(0);
+  $('#play').textContent = '■ 멈춤';
+  timer = setInterval(()=>{ if(step >= STAGES.length){ stop(); return; } go(step+1); }, 1800);
+};
+document.addEventListener('keydown', e=>{
+  if(e.target.tagName === 'INPUT') return;
+  if(e.key === 'ArrowRight' || e.key === ' '){ e.preventDefault(); stop(); go(step+1); }
+  if(e.key === 'ArrowLeft'){ stop(); go(step-1); }
+});
+
+function chips(){
+  $('#examples').innerHTML = DATA.map((t,i)=>`<button class="chip" data-i="${i}">${esc(t.raw)}</button>`).join('');
+  document.querySelectorAll('#examples .chip').forEach(b=>b.onclick = ()=>{
+    document.querySelectorAll('#examples .chip').forEach(x=>x.classList.remove('on')); b.classList.add('on'); stop(); render(DATA[+b.dataset.i]);
+  });
+}
+async function live(){
+  // demo.py가 띄운 서버에서 열었으면 실제 모델로 새 문장 추적
+  if(!location.protocol.startsWith('http')) return;
+  try{ const r = await fetch('/api/trace?q=' + encodeURIComponent('테스트')); if(!r.ok) return; }catch(e){ return; }
+  $('#live').style.display = 'flex';
+  const run = async ()=>{ const q = $('#q').value.trim(); if(!q) return; stop();
+    const r = await fetch('/api/trace?q=' + encodeURIComponent(q)); const t = await r.json();
+    document.querySelectorAll('#examples .chip').forEach(x=>x.classList.remove('on')); render(t); };
+  $('#go').onclick = run; $('#q').addEventListener('keydown', e=>{ if(e.key==='Enter') run(); });
+}
+buildShell(); chips();
+if(DATA.length){ document.querySelector('#examples .chip').classList.add('on'); render(DATA[0]); }
+live();
+</script>
+</body>
+</html>
